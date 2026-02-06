@@ -121,77 +121,287 @@ def resource_path(relative_path: str) -> Path:
     return base_path / relative_path
 
 
-def get_dialog_button_styles():
-    """Get button styles for dialog windows."""
-    primary_style = """
-        QPushButton {
+def get_application_stylesheet(is_dark: bool) -> str:
+    """Return a single, comprehensive QSS stylesheet for the entire application.
+    
+    Uses Apple's Semantic Colors to ensure a native macOS look in both
+    Light and Dark modes. Applied once on the QApplication so that every
+    window, dialog, and popup inherits the theme automatically.
+    """
+    # --- Palette definition ---
+    bg_window = "#1E1E1E" if is_dark else "#F5F5F7"
+    bg_widget = "#2D2D2D" if is_dark else "#FFFFFF"
+    text_main = "#FFFFFF" if is_dark else "#1D1D1F"
+    text_sec  = "#98989D" if is_dark else "#86868B"
+    border    = "#3D3D3D" if is_dark else "#D2D2D7"
+    input_bg  = "#1A1A1A" if is_dark else "#FFFFFF"
+    hover_bg  = "#3A3A3C" if is_dark else "#F0F0F0"
+    pressed_bg    = "#2C2C2E" if is_dark else "#E0E0E0"
+    disabled_bg   = "#3A3A3C" if is_dark else "#E5E5EA"
+    disabled_text = "#636366" if is_dark else "#8E8E93"
+    scrollbar_handle = "#4D4D4D" if is_dark else "#C1C1C1"
+
+    return f"""
+        /* ========== Global Defaults ========== */
+        QWidget {{
+            background-color: {bg_window};
+            color: {text_main};
+            font-family: "SF Pro", "SF Compact", "Helvetica Neue", sans-serif;
+            font-size: 13px;
+        }}
+
+        QMainWindow {{
+            background-color: {bg_window};
+        }}
+
+        QLabel {{
+            background-color: transparent;
+        }}
+
+        /* Secondary label (info / caption text) */
+        QLabel#secondary_label {{
+            color: {text_sec};
+            font-size: 11px;
+        }}
+
+        QStatusBar {{
+            background-color: {bg_window};
+            color: {text_sec};
+        }}
+
+        QGroupBox {{
+            background-color: transparent;
+            border: none;
+            margin-top: 20px;
+            padding-top: 4px;
+            font-weight: 600;
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 0 4px;
+            top: 4px;
+        }}
+
+        /* ========== Inputs & Text Areas ========== */
+        QLineEdit, QTextEdit, QPlainTextEdit {{
+            background-color: {input_bg};
+            color: {text_main};
+            border: 1px solid {border};
+            border-radius: 6px;
+            padding: 6px;
+            selection-background-color: #007AFF;
+            selection-color: white;
+        }}
+        QLineEdit:focus, QTextEdit:focus {{
+            border-color: #007AFF;
+        }}
+
+        QComboBox {{
+            background-color: {bg_widget};
+            color: {text_main};
+            border: 1px solid {border};
+            border-radius: 6px;
+            padding: 5px 10px;
+            min-height: 20px;
+        }}
+        QComboBox:hover {{
+            border-color: #007AFF;
+        }}
+        QComboBox::drop-down {{
+            border: none;
+            width: 20px;
+        }}
+        QComboBox::down-arrow {{
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 6px solid {text_sec};
+            margin-right: 8px;
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {bg_widget};
+            color: {text_main};
+            selection-background-color: #007AFF;
+            selection-color: white;
+        }}
+
+        /* ========== Modern macOS Scrollbars ========== */
+        QScrollBar:vertical {{
+            border: none;
+            background: transparent;
+            width: 8px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {scrollbar_handle};
+            min-height: 20px;
+            border-radius: 4px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {text_sec};
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: transparent;
+        }}
+
+        QScrollBar:horizontal {{
+            border: none;
+            background: transparent;
+            height: 8px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background: {scrollbar_handle};
+            min-width: 20px;
+            border-radius: 4px;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background: {text_sec};
+        }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            width: 0px;
+        }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: transparent;
+        }}
+
+        /* ========== Tab Bar Styling ========== */
+        QTabWidget {{
+            background: {bg_window};
+            border: 0;
+            padding: 0;
+            margin: 0;
+        }}
+        QTabWidget::pane {{
+            background: {bg_window};
+            border: 0;
+            padding: 0;
+            margin: 0;
+            top: 0;
+        }}
+        QTabWidget::tab-bar {{
+            background: {bg_window};
+            border: 0;
+            left: 0;
+        }}
+        QTabBar {{
+            background: {bg_window};
+            border: 0;
+            qproperty-drawBase: 0;
+        }}
+        QTabBar::scroller {{
+            width: 0;
+        }}
+        QTabBar::tear {{
+            width: 0;
+            border: 0;
+        }}
+        QTabBar::tab {{
+            background: transparent;
+            color: {text_sec};
+            padding: 6px 14px;
+            margin-right: 8px;
+            margin-bottom: 4px;
+            border: 1px solid {border};
+            border-radius: 6px;
+        }}
+        QTabBar::tab:selected {{
+            background-color: #007AFF;
+            color: white;
+            border-color: #007AFF;
+            font-weight: 500;
+        }}
+        QTabBar::tab:hover:!selected {{
+            background: {hover_bg};
+            color: {text_main};
+        }}
+        QTabBar::tab:disabled {{
+            background: transparent;
+            color: {disabled_text};
+            border: 1px solid {disabled_bg};
+        }}
+        QTabBar::tab:selected:disabled {{
+            background: {disabled_bg};
+            color: {disabled_text};
+            border: 1px solid {disabled_bg};
+            font-weight: 500;
+        }}
+
+        /* ========== BUTTON STATES ========== */
+
+        /* Default (Secondary) Button */
+        QPushButton {{
+            background-color: {bg_widget};
+            border: 1px solid {border};
+            border-radius: 6px;
+            padding: 6px 14px;
+            font-weight: 500;
+        }}
+        QPushButton:hover {{
+            background-color: {hover_bg};
+        }}
+        QPushButton:pressed {{
+            background-color: {pressed_bg};
+        }}
+
+        /* Primary Blue Button */
+        QPushButton[class="primary"] {{
             background-color: #007AFF;
             color: white;
             border: none;
-            border-radius: 6px;
-            padding: 6px 14px;
-            font-weight: 500;
-        }
-        QPushButton:hover {
+        }}
+        QPushButton[class="primary"]:hover {{
             background-color: #0A84FF;
-        }
-        QPushButton:pressed {
-            background-color: #0066CC;
-        }
-    """
-    
-    secondary_style = """
-        QPushButton {
-            background-color: #FFFFFF;
-            color: #1D1D1F;
-            border: 1px solid #D2D2D7;
-            border-radius: 6px;
-            padding: 6px 14px;
-            font-weight: 500;
-        }
-        QPushButton:hover {
-            background-color: #F0F0F0;
-        }
-        QPushButton:pressed {
-            background-color: #E0E0E0;
-        }
-    """
-    
-    danger_style = """
-        QPushButton {
-            background-color: #FF3B30;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            padding: 6px 14px;
-            font-weight: 500;
-        }
-        QPushButton:hover {
-            background-color: #FF453A;
-        }
-        QPushButton:pressed {
-            background-color: #D62D20;
-        }
-    """
-    
-    success_style = """
-        QPushButton {
+        }}
+        QPushButton[class="primary"]:pressed {{
+            background-color: #0062CC;
+        }}
+
+        /* Success Green Button */
+        QPushButton[class="success"] {{
             background-color: #34C759;
             color: white;
             border: none;
-            border-radius: 6px;
-            padding: 6px 14px;
-            font-weight: 500;
-        }
-        QPushButton:hover {
+        }}
+        QPushButton[class="success"]:hover {{
             background-color: #30D158;
-        }
-        QPushButton:pressed {
-            background-color: #28A745;
-        }
+        }}
+        QPushButton[class="success"]:pressed {{
+            background-color: #248A3D;
+        }}
+
+        /* Danger Red Button */
+        QPushButton[class="danger"] {{
+            background-color: #FF3B30;
+            color: white;
+            border: none;
+        }}
+        QPushButton[class="danger"]:hover {{
+            background-color: #FF453A;
+        }}
+        QPushButton[class="danger"]:pressed {{
+            background-color: #C93028;
+        }}
+
+        /* Round Time Buttons — stacked stepper style */
+        QPushButton#time_btn {{
+            border-radius: 4px;
+            padding: 0px;
+            icon-size: 10px;
+            min-width: 0px;
+            min-height: 0px;
+        }}
+
+        /* Disabled State for all buttons */
+        QPushButton:disabled {{
+            background-color: {disabled_bg};
+            color: {disabled_text};
+            border: none;
+        }}
     """
-    
-    return primary_style, secondary_style, danger_style, success_style
 
 
 class LogViewerDialog(QMainWindow):
@@ -203,8 +413,6 @@ class LogViewerDialog(QMainWindow):
         self.setMinimumSize(600, 400)
         self.resize(800, 500)
         
-        primary_style, secondary_style, danger_style, _ = get_dialog_button_styles()
-        
         # Central widget
         central = QWidget()
         self.setCentralWidget(central)
@@ -215,35 +423,25 @@ class LogViewerDialog(QMainWindow):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Menlo", 11))
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #FFFFFF;
-                color: #1D1D1F;
-                border: 1px solid #D2D2D7;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
         layout.addWidget(self.log_text)
         
-        # Buttons
+        # Buttons — styled via global stylesheet class properties
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
         
         self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.setStyleSheet(primary_style)
+        self.refresh_btn.setProperty("class", "primary")
         self.refresh_btn.clicked.connect(self._load_log)
         btn_layout.addWidget(self.refresh_btn)
         
         self.clear_btn = QPushButton("Clear Log")
-        self.clear_btn.setStyleSheet(danger_style)
+        self.clear_btn.setProperty("class", "danger")
         self.clear_btn.clicked.connect(self._clear_log)
         btn_layout.addWidget(self.clear_btn)
         
         btn_layout.addStretch()
         
         self.close_btn = QPushButton("Close")
-        self.close_btn.setStyleSheet(secondary_style)
         self.close_btn.clicked.connect(self.close)
         btn_layout.addWidget(self.close_btn)
         
@@ -315,8 +513,6 @@ class ConfigEditorDialog(QMainWindow):
         self.resize(700, 600)
         self._is_modified = False
         
-        primary_style, secondary_style, _, success_style = get_dialog_button_styles()
-        
         # Central widget
         central = QWidget()
         self.setCentralWidget(central)
@@ -325,62 +521,48 @@ class ConfigEditorDialog(QMainWindow):
         
         # Info label
         info_label = QLabel(f"Editing: {DEFAULT_CONFIG_PATH}")
-        info_label.setStyleSheet("color: #86868B; font-size: 11px;")
+        info_label.setObjectName("secondary_label")
         layout.addWidget(info_label)
         
         # Config text area
         self.config_text = QTextEdit()
         self.config_text.setFont(QFont("Menlo", 11))
-        self.config_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #FFFFFF;
-                color: #1D1D1F;
-                border: 1px solid #D2D2D7;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
         self.config_text.textChanged.connect(self._on_text_changed)
         layout.addWidget(self.config_text)
         
         # Status label for validation
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(self.status_label)
         
-        # Buttons
+        # Buttons — styled via global stylesheet class properties
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
         
         self.reload_btn = QPushButton("Reload")
-        self.reload_btn.setStyleSheet(secondary_style)
         self.reload_btn.clicked.connect(self._load_config)
         btn_layout.addWidget(self.reload_btn)
         
         self.download_btn = QPushButton("Download from URL")
-        self.download_btn.setStyleSheet(secondary_style)
         self.download_btn.clicked.connect(self._download_from_url)
         btn_layout.addWidget(self.download_btn)
         
         self.restore_btn = QPushButton("Restore Packaged Config")
-        self.restore_btn.setStyleSheet(secondary_style)
         self.restore_btn.clicked.connect(self._restore_packaged_config)
         btn_layout.addWidget(self.restore_btn)
         
         btn_layout.addStretch()
         
         self.save_btn = QPushButton("Save")
-        self.save_btn.setStyleSheet(success_style)
+        self.save_btn.setProperty("class", "success")
         self.save_btn.clicked.connect(self._save_config)
         btn_layout.addWidget(self.save_btn)
         
         self.validate_btn = QPushButton("Validate JSON")
-        self.validate_btn.setStyleSheet(primary_style)
+        self.validate_btn.setProperty("class", "primary")
         self.validate_btn.clicked.connect(self._validate_json)
         btn_layout.addWidget(self.validate_btn)
         
         self.close_btn = QPushButton("Close")
-        self.close_btn.setStyleSheet(secondary_style)
         self.close_btn.clicked.connect(self.close)
         btn_layout.addWidget(self.close_btn)
         
@@ -801,6 +983,7 @@ class TranscriptRecorderApp(QMainWindow):
         app_layout.addWidget(self.app_combo)
         
         self.new_btn = QPushButton("New Recording")
+        self.new_btn.setProperty("class", "primary")
         self.new_btn.setToolTip("Start a new recording session")
         self.new_btn.clicked.connect(self._on_new_recording)
         app_layout.addWidget(self.new_btn)
@@ -822,12 +1005,14 @@ class TranscriptRecorderApp(QMainWindow):
         controls_layout.setSpacing(8)
         
         self.capture_btn = QPushButton("Capture Now")
+        self.capture_btn.setProperty("class", "primary")
         self.capture_btn.setEnabled(False)
         self.capture_btn.setToolTip("Take a single transcript snapshot")
         self.capture_btn.clicked.connect(self._on_capture_now)
         controls_layout.addWidget(self.capture_btn)
         
         self.auto_capture_btn = QPushButton("Start Auto Capture")
+        self.auto_capture_btn.setProperty("class", "success")
         self.auto_capture_btn.setEnabled(False)
         self.auto_capture_btn.setToolTip("Toggle continuous transcript capture")
         self.auto_capture_btn.clicked.connect(self._on_toggle_auto_capture)
@@ -877,25 +1062,33 @@ class TranscriptRecorderApp(QMainWindow):
         self.meeting_datetime_input.textChanged.connect(self._on_meeting_details_changed)
         datetime_layout.addWidget(self.meeting_datetime_input, stretch=1)
         
-        # 1. Grab the native system icons once
+        # Grab the native system icons once
         style = self.style()
         icon_up = style.standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
         icon_down = style.standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
 
-        # Round time buttons (right-aligned)
-        self.time_down_btn = QPushButton()
-        self.time_down_btn.setIcon(icon_down)
-        self.time_down_btn.setFixedWidth(36)
-        self.time_down_btn.setToolTip("Round time down by 5 minutes")
-        self.time_down_btn.clicked.connect(self._on_round_time_down)
-        datetime_layout.addWidget(self.time_down_btn)
+        # Round time buttons — stacked vertically beside the text field
+        time_btn_stack = QVBoxLayout()
+        time_btn_stack.setSpacing(1)
+        time_btn_stack.setContentsMargins(0, 0, 0, 0)
         
         self.time_up_btn = QPushButton()
+        self.time_up_btn.setObjectName("time_btn")
         self.time_up_btn.setIcon(icon_up)
-        self.time_up_btn.setFixedWidth(36)
+        self.time_up_btn.setFixedSize(28, 14)
         self.time_up_btn.setToolTip("Round time up by 5 minutes")
         self.time_up_btn.clicked.connect(self._on_round_time_up)
-        datetime_layout.addWidget(self.time_up_btn)
+        time_btn_stack.addWidget(self.time_up_btn)
+        
+        self.time_down_btn = QPushButton()
+        self.time_down_btn.setObjectName("time_btn")
+        self.time_down_btn.setIcon(icon_down)
+        self.time_down_btn.setFixedSize(28, 14)
+        self.time_down_btn.setToolTip("Round time down by 5 minutes")
+        self.time_down_btn.clicked.connect(self._on_round_time_down)
+        time_btn_stack.addWidget(self.time_down_btn)
+        
+        datetime_layout.addLayout(time_btn_stack)
         
         details_layout.addLayout(datetime_layout)
         
@@ -914,6 +1107,7 @@ class TranscriptRecorderApp(QMainWindow):
         details_actions_layout.setSpacing(8)
         
         self.save_details_btn = QPushButton("Save Details")
+        self.save_details_btn.setProperty("class", "primary")
         self.save_details_btn.setEnabled(False)
         self.save_details_btn.clicked.connect(self._on_save_details_clicked)
         details_actions_layout.addWidget(self.save_details_btn)
@@ -1000,317 +1194,23 @@ class TranscriptRecorderApp(QMainWindow):
         self.statusBar().showMessage(f"Appearance: {mode.capitalize()}")
     
     def _apply_styles(self):
-        """Apply full theme styling including backgrounds, text, and buttons."""
+        """Apply the global application stylesheet.
+        
+        Sets a single comprehensive QSS on QApplication so that every
+        window, dialog, and popup inherits the theme automatically.
+        After swapping the stylesheet, unpolish/polish the entire widget
+        tree so the change takes effect immediately (required for live
+        Light ↔ Dark toggling).
+        """
         is_dark = self._is_dark_mode()
+        app = QApplication.instance()
+        app.setStyleSheet(get_application_stylesheet(is_dark))
         
-        if is_dark:
-            # Dark mode - dark backgrounds, light text
-            window_bg = "#1E1E1E"
-            group_bg = "#2D2D2D"
-            group_border = "#3D3D3D"
-            text_primary = "#FFFFFF"
-            text_secondary = "#98989D"
-            text_edit_bg = "#1A1A1A"
-            text_edit_text = "#FFFFFF"
-            text_edit_border = "#3D3D3D"
-            disabled_bg = "#3A3A3C"
-            disabled_text = "#636366"
-            secondary_btn_bg = "#3A3A3C"
-            secondary_btn_text = "#FFFFFF"
-            secondary_btn_border = "#4A4A4C"
-            secondary_btn_hover = "#4A4A4C"
-            combo_bg = "#2D2D2D"
-            combo_text = "#FFFFFF"
-            combo_border = "#3D3D3D"
-        else:
-            # Light mode - light backgrounds, dark text
-            window_bg = "#F5F5F7"
-            group_bg = "#FFFFFF"
-            group_border = "#E0E0E0"
-            text_primary = "#1D1D1F"
-            text_secondary = "#86868B"
-            text_edit_bg = "#FFFFFF"
-            text_edit_text = "#1D1D1F"
-            text_edit_border = "#D2D2D7"
-            disabled_bg = "#E5E5EA"
-            disabled_text = "#8E8E93"
-            secondary_btn_bg = "#FFFFFF"
-            secondary_btn_text = "#1D1D1F"
-            secondary_btn_border = "#D2D2D7"
-            secondary_btn_hover = "#F0F0F0"
-            combo_bg = "#FFFFFF"
-            combo_text = "#1D1D1F"
-            combo_border = "#D2D2D7"
-        
-        # Main window style - unified background, no section boxes
-        window_style = f"""
-            QMainWindow {{
-                background-color: {window_bg};
-            }}
-            QWidget {{
-                background-color: {window_bg};
-                color: {text_primary};
-            }}
-            QGroupBox {{
-                background-color: transparent;
-                border: none;
-                margin-top: 8px;
-                padding-top: 4px;
-                font-weight: 600;
-                color: {text_primary};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 2px;
-                color: {text_primary};
-            }}
-            QLabel {{
-                background-color: transparent;
-                color: {text_primary};
-            }}
-            QStatusBar {{
-                background-color: {window_bg};
-                color: {text_secondary};
-            }}
-        """
-        self.setStyleSheet(window_style)
-        
-        # Text edit (transcript area)
-        text_edit_style = f"""
-            QTextEdit {{
-                background-color: {text_edit_bg};
-                color: {text_edit_text};
-                border: 1px solid {text_edit_border};
-                border-radius: 6px;
-                padding: 8px;
-                selection-background-color: #007AFF;
-                selection-color: white;
-            }}
-        """
-        self.transcript_text.setStyleSheet(text_edit_style)
-        
-        # Combo box
-        combo_style = f"""
-            QComboBox {{
-                background-color: {combo_bg};
-                color: {combo_text};
-                border: 1px solid {combo_border};
-                border-radius: 6px;
-                padding: 5px 10px;
-                min-height: 20px;
-            }}
-            QComboBox:hover {{
-                border-color: #007AFF;
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 6px solid {text_secondary};
-                margin-right: 8px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {combo_bg};
-                color: {combo_text};
-                selection-background-color: #007AFF;
-                selection-color: white;
-            }}
-        """
-        self.app_combo.setStyleSheet(combo_style)
-        
-        # Primary button (blue)
-        primary_style = f"""
-            QPushButton {{
-                background-color: #007AFF;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: #0A84FF;
-            }}
-            QPushButton:pressed {{
-                background-color: #0066CC;
-            }}
-            QPushButton:disabled {{
-                background-color: {disabled_bg};
-                color: {disabled_text};
-            }}
-        """
-        
-        # Success button (green) - stored for toggle button
-        self._success_style = f"""
-            QPushButton {{
-                background-color: #34C759;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: #30D158;
-            }}
-            QPushButton:pressed {{
-                background-color: #28A745;
-            }}
-            QPushButton:disabled {{
-                background-color: {disabled_bg};
-                color: {disabled_text};
-            }}
-        """
-        
-        # Danger button (red) - stored for toggle button
-        self._danger_style = f"""
-            QPushButton {{
-                background-color: #FF3B30;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: #FF453A;
-            }}
-            QPushButton:pressed {{
-                background-color: #D62D20;
-            }}
-            QPushButton:disabled {{
-                background-color: {disabled_bg};
-                color: {disabled_text};
-            }}
-        """
-        
-        # Secondary button
-        secondary_style = f"""
-            QPushButton {{
-                background-color: {secondary_btn_bg};
-                color: {secondary_btn_text};
-                border: 1px solid {secondary_btn_border};
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {secondary_btn_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {secondary_btn_hover};
-            }}
-            QPushButton:disabled {{
-                background-color: {disabled_bg};
-                color: {disabled_text};
-                border-color: {disabled_bg};
-            }}
-        """
-        
-        # Apply button styles
-        self.new_btn.setStyleSheet(primary_style)
-        self.reset_btn.setStyleSheet(secondary_style)
-        self.capture_btn.setStyleSheet(primary_style)
-        self._update_auto_capture_btn_style()
-        self.copy_btn.setStyleSheet(secondary_style)
-        self.open_folder_btn.setStyleSheet(secondary_style)
-        self.save_details_btn.setStyleSheet(secondary_style)
-        self.open_folder_btn2.setStyleSheet(secondary_style)
-        self.time_down_btn.setStyleSheet(secondary_style)
-        self.time_up_btn.setStyleSheet(secondary_style)
-        
-        # Secondary text color
-        self.line_count_label.setStyleSheet(f"background-color: transparent; color: {text_secondary};")
-        
-        # Tab widget - button-like tabs, completely flat
-        tab_style = f"""
-            QTabWidget {{
-                background: {window_bg};
-                border: 0;
-                padding: 0;
-                margin: 0;
-            }}
-            QTabWidget::pane {{
-                background: {window_bg};
-                border: 0;
-                padding: 0;
-                margin: 0;
-                top: 0;
-            }}
-            QTabWidget::tab-bar {{
-                background: {window_bg};
-                border: 0;
-                left: 0;
-            }}
-            QTabBar {{
-                background: {window_bg};
-                border: 0;
-                qproperty-drawBase: 0;
-            }}
-            QTabBar::scroller {{
-                width: 0;
-            }}
-            QTabBar::tear {{
-                width: 0;
-                border: 0;
-            }}
-            QTabBar::tab {{
-                background: transparent;
-                color: {text_secondary};
-                padding: 6px 14px;
-                margin-right: 8px;
-                margin-bottom: 4px;
-                border: 1px solid {text_edit_border};
-                border-radius: 6px;
-            }}
-            QTabBar::tab:selected {{
-                background: #007AFF;
-                color: white;
-                border: 1px solid #007AFF;
-                font-weight: 500;
-            }}
-            QTabBar::tab:hover:!selected {{
-                background: {secondary_btn_hover};
-                color: {text_primary};
-            }}
-            QTabBar::tab:disabled {{
-                background: transparent;
-                color: {disabled_text};
-                border: 1px solid {disabled_bg};
-            }}
-            QTabBar::tab:selected:disabled {{
-                background: {disabled_bg};
-                color: {disabled_text};
-                border: 1px solid {disabled_bg};
-                font-weight: 500;
-            }}
-        """
-        self.tab_widget.setStyleSheet(tab_style)
-        
-        # Line edit (meeting name)
-        line_edit_style = f"""
-            QLineEdit {{
-                background-color: {text_edit_bg};
-                color: {text_edit_text};
-                border: 1px solid {text_edit_border};
-                border-radius: 6px;
-                padding: 6px 10px;
-                selection-background-color: #007AFF;
-                selection-color: white;
-            }}
-            QLineEdit:focus {{
-                border-color: #007AFF;
-            }}
-        """
-        self.meeting_name_input.setStyleSheet(line_edit_style)
-        self.meeting_datetime_input.setStyleSheet(line_edit_style)
-        
-        # Meeting notes text edit
-        self.meeting_notes_input.setStyleSheet(text_edit_style)
+        # Force every widget in the app to re-read the new stylesheet
+        for widget in app.allWidgets():
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        self.update()
         
     def _setup_menubar(self):
         """Create the application menu bar."""
@@ -1848,10 +1748,14 @@ class TranscriptRecorderApp(QMainWindow):
         """Update the auto capture button text and color based on recording state."""
         if self.is_recording:
             self.auto_capture_btn.setText("Stop Auto Capture")
-            self.auto_capture_btn.setStyleSheet(self._danger_style)
+            self.auto_capture_btn.setProperty("class", "danger")
         else:
             self.auto_capture_btn.setText("Start Auto Capture")
-            self.auto_capture_btn.setStyleSheet(self._success_style)
+            self.auto_capture_btn.setProperty("class", "success")
+        
+        # Force Qt to re-read the stylesheet for this widget
+        self.auto_capture_btn.style().unpolish(self.auto_capture_btn)
+        self.auto_capture_btn.style().polish(self.auto_capture_btn)
     
     def _on_toggle_auto_capture(self):
         """Toggle auto capture on/off."""
