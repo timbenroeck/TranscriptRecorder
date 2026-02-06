@@ -349,6 +349,11 @@ class ConfigEditorDialog(QMainWindow):
         self.validate_btn.clicked.connect(self._validate_json)
         btn_layout.addWidget(self.validate_btn)
         
+        self.download_btn = QPushButton("Download from URL...")
+        self.download_btn.setStyleSheet(secondary_style)
+        self.download_btn.clicked.connect(self._download_from_url)
+        btn_layout.addWidget(self.download_btn)
+        
         btn_layout.addStretch()
         
         self.save_btn = QPushButton("Save")
@@ -428,6 +433,77 @@ class ConfigEditorDialog(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save configuration:\n{e}")
+    
+    def _download_from_url(self):
+        """Download configuration from a URL."""
+        # Construct default URL from version.py constants
+        default_url = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/refs/heads/main/config.json"
+        
+        # Show input dialog for URL
+        from PyQt6.QtWidgets import QInputDialog
+        url, ok = QInputDialog.getText(
+            self,
+            "Download Configuration from URL",
+            "Enter the URL to download configuration from:",
+            QLineEdit.EchoMode.Normal,
+            default_url
+        )
+        
+        if not ok or not url.strip():
+            return
+        
+        url = url.strip()
+        
+        try:
+            self.status_label.setText("Downloading...")
+            self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+            QApplication.processEvents()
+            
+            req = urllib.request.Request(url, headers={'User-Agent': f'{APP_NAME}/{APP_VERSION}'})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                content = response.read().decode('utf-8')
+            
+            # Validate JSON
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as e:
+                self.status_label.setText(f"✗ Downloaded file is not valid JSON: {e}")
+                self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+                QMessageBox.critical(
+                    self, "Invalid Configuration",
+                    f"The downloaded file is not valid JSON:\n{e}"
+                )
+                return
+            
+            # Update the text area with the downloaded content
+            self.config_text.setPlainText(content)
+            self._is_modified = True
+            self.status_label.setText(f"✓ Downloaded from URL (click Save to apply)")
+            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            logger.info(f"Configuration downloaded from {url}")
+            
+        except urllib.error.HTTPError as e:
+            self.status_label.setText(f"✗ HTTP Error {e.code}")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            QMessageBox.critical(
+                self, "Download Error",
+                f"HTTP Error {e.code}: {e.reason}\n\nURL: {url}"
+            )
+        except urllib.error.URLError as e:
+            self.status_label.setText("✗ Download failed")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            QMessageBox.critical(
+                self, "Download Error",
+                f"Failed to download configuration:\n{e.reason}\n\nURL: {url}"
+            )
+        except Exception as e:
+            self.status_label.setText("✗ Download failed")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            logger.exception("Failed to download configuration from URL")
+            QMessageBox.critical(
+                self, "Download Error",
+                f"Failed to download configuration:\n{e}"
+            )
     
     def closeEvent(self, event):
         """Warn if there are unsaved changes."""
@@ -1150,11 +1226,6 @@ class TranscriptRecorderApp(QMainWindow):
         log_action.triggered.connect(self._show_log_viewer)
         view_menu.addAction(log_action)
         
-        self.config_action = QAction("Edit Configuration...", self)
-        self.config_action.setMenuRole(QAction.MenuRole.NoRole)  # Prevent macOS from moving it
-        self.config_action.triggered.connect(self._show_config_editor)
-        view_menu.addAction(self.config_action)
-        
         # Also add to macOS app menu as Preferences (standard location for Cmd+,)
         self.prefs_action = QAction("Preferences...", self)
         self.prefs_action.setShortcut("Cmd+,")
@@ -1164,6 +1235,11 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Maintenance menu
         maint_menu = menubar.addMenu("Maintenance")
+        
+        self.config_action = QAction("Edit Configuration...", self)
+        self.config_action.setMenuRole(QAction.MenuRole.NoRole)  # Prevent macOS from moving it
+        self.config_action.triggered.connect(self._show_config_editor)
+        maint_menu.addAction(self.config_action)
         
         reload_config_action = QAction("Reload Configuration", self)
         reload_config_action.triggered.connect(self._reload_configuration)

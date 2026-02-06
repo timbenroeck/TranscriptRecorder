@@ -14,8 +14,8 @@ VERSION_PATCH = 0
 __version__ = f"{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_PATCH}"
 
 # GitHub repository information (for update checking)
-GITHUB_OWNER = "YOUR_GITHUB_USERNAME"  # TODO: Update with your GitHub username
-GITHUB_REPO = "tr_v3"  # TODO: Update with your repository name
+GITHUB_OWNER = "timbenroeck"
+GITHUB_REPO = "TranscriptRecorder"
 
 def get_version() -> str:
     """Return the full version string."""

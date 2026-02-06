@@ -37,3 +37,5 @@ fi
 echo "Running gui_app.py…"
 python gui_app.py
 
+
+#python setup_py2app.py clean && python setup_py2app.py py2app

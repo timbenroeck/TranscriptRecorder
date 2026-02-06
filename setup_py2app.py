@@ -61,7 +61,7 @@ DATA_FILES = [
 # py2app options
 OPTIONS = {
     'py2app': {
-        'argv_emulation': True,
+        'argv_emulation': False,
         'includes': [
             'transcript_recorder',
             'transcript_utils',
@@ -90,12 +90,10 @@ OPTIONS = {
             'numpy',
             'scipy',
             'PIL',
-            'textual',
-            # Exclude these to avoid packaging collision between
-            # standalone package and setuptools._vendor version
+            'pip',
             'setuptools',
             'pkg_resources',
-            'packaging',
+            'wheel',
             '_distutils_hack',
         ],
         'resources': DATA_FILES,
