@@ -1898,7 +1898,9 @@ class TranscriptRecorderApp(QMainWindow):
         """Check GitHub releases for a newer version."""
         self.statusBar().showMessage("Checking for updates...")
         
-        if GITHUB_OWNER == "YOUR_GITHUB_USERNAME" or GITHUB_REPO == "tr_v3":
+        # Check if GitHub info is configured
+        if GITHUB_OWNER == "YOUR_GITHUB_USERNAME":
+            logger.warning("Update check skipped: GITHUB_OWNER not configured")
             QMessageBox.information(
                 self, "Update Check",
                 "Update checking is not configured.\n\n"
@@ -1908,14 +1910,19 @@ class TranscriptRecorderApp(QMainWindow):
             self.statusBar().showMessage("Ready")
             return
         
+        # Build the API URL
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+        logger.debug(f"Checking for updates at: {url}")
+        logger.debug(f"Current version: {APP_VERSION}")
+        
         try:
             # Query GitHub releases API
-            url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
             request = urllib.request.Request(
                 url,
-                headers={"Accept": "application/vnd.github.v3+json", "User-Agent": APP_NAME}
+                headers={"Accept": "application/vnd.github.v3+json", "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
             )
             
+            logger.debug("Sending request to GitHub API...")
             with urllib.request.urlopen(request, timeout=10) as response:
                 data = json.loads(response.read().decode('utf-8'))
             
@@ -1923,6 +1930,10 @@ class TranscriptRecorderApp(QMainWindow):
             release_url = data.get("html_url", "")
             release_notes = data.get("body", "No release notes available.")
             assets = data.get("assets", [])
+            
+            logger.debug(f"Latest release version: {latest_version}")
+            logger.debug(f"Release URL: {release_url}")
+            logger.debug(f"Number of assets: {len(assets)}")
             
             # Compare versions
             current_parts = [int(x) for x in APP_VERSION.split(".")]
@@ -1934,12 +1945,16 @@ class TranscriptRecorderApp(QMainWindow):
             while len(latest_parts) < len(current_parts):
                 latest_parts.append(0)
             
+            logger.debug(f"Version comparison: current={current_parts}, latest={latest_parts}")
+            
             if latest_parts > current_parts:
+                logger.info(f"New version available: {latest_version} (current: {APP_VERSION})")
                 # Newer version available
                 # Find the .dmg or .zip asset
                 download_asset = None
                 for asset in assets:
                     name = asset.get("name", "").lower()
+                    logger.debug(f"Found asset: {name}")
                     if name.endswith(".dmg") or name.endswith(".zip"):
                         download_asset = asset
                         break
@@ -1952,6 +1967,7 @@ class TranscriptRecorderApp(QMainWindow):
                 )
                 
                 if download_asset:
+                    logger.debug(f"Download asset found: {download_asset.get('name')}")
                     reply = QMessageBox.question(
                         self, "Update Available",
                         f"{msg}\n\nWould you like to download and install the update?",
@@ -1961,6 +1977,7 @@ class TranscriptRecorderApp(QMainWindow):
                     if reply == QMessageBox.StandardButton.Yes:
                         self._download_and_install_update(download_asset, latest_version)
                 else:
+                    logger.debug("No downloadable asset (.dmg or .zip) found")
                     # No downloadable asset, just show the release page
                     reply = QMessageBox.question(
                         self, "Update Available",
@@ -1970,6 +1987,7 @@ class TranscriptRecorderApp(QMainWindow):
                     if reply == QMessageBox.StandardButton.Yes:
                         subprocess.run(["open", release_url])
             else:
+                logger.info(f"Already running latest version ({APP_VERSION})")
                 QMessageBox.information(
                     self, "No Updates",
                     f"You're running the latest version ({APP_VERSION})."
@@ -1977,18 +1995,37 @@ class TranscriptRecorderApp(QMainWindow):
             
             self.statusBar().showMessage("Ready")
             
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                logger.warning(f"No releases found at {url} (HTTP 404)")
+                QMessageBox.information(
+                    self, "No Releases",
+                    f"No releases have been published yet.\n\n"
+                    f"You're running version {APP_VERSION}.\n\n"
+                    f"Checked: {url}"
+                )
+            else:
+                logger.error(f"HTTP error checking for updates: {e.code} {e.reason}")
+                logger.error(f"URL: {url}")
+                QMessageBox.warning(
+                    self, "Update Check Failed",
+                    f"HTTP Error {e.code}: {e.reason}\n\nURL: {url}"
+                )
+            self.statusBar().showMessage("Ready")
         except urllib.error.URLError as e:
             logger.error(f"Failed to check for updates: {e}")
+            logger.error(f"URL: {url}")
             QMessageBox.warning(
                 self, "Update Check Failed",
-                f"Could not connect to GitHub to check for updates.\n\nError: {e}"
+                f"Could not connect to GitHub to check for updates.\n\nError: {e}\n\nURL: {url}"
             )
             self.statusBar().showMessage("Update check failed")
         except Exception as e:
             logger.error(f"Update check error: {e}", exc_info=True)
+            logger.error(f"URL: {url}")
             QMessageBox.warning(
                 self, "Update Check Failed",
-                f"An error occurred while checking for updates.\n\nError: {e}"
+                f"An error occurred while checking for updates.\n\nError: {e}\n\nURL: {url}"
             )
             self.statusBar().showMessage("Update check failed")
     

@@ -24,7 +24,41 @@ A macOS application that captures meeting transcripts and live captions using th
 
 1. Download the latest `.dmg` file from [Releases](../../releases)
 2. Open the DMG and drag "Transcript Recorder" to your Applications folder
-3. On first launch, grant Accessibility permissions when prompted
+3. Follow the steps below to allow the unsigned app and grant required permissions
+
+#### Allowing the Unsigned App
+
+Since Transcript Recorder is not signed with an Apple Developer certificate, macOS will block it on first launch. Follow these steps to allow it:
+
+**Step 1: Dismiss the blocked app warning**
+
+When you first open the app, macOS will display a warning that it cannot verify the developer. Click **Done** to dismiss the dialog.
+
+![Blocked app warning](images/1_blocked_app.png)
+
+**Step 2: Allow the app in System Settings**
+
+Open **System Settings → Privacy & Security**. Scroll down to the Security section where you will see a message about "Transcript Recorder" being blocked. Click **Open Anyway**.
+
+![Allow blocked app in System Settings](images/2_allow_blocked_app.png)
+
+**Step 3: Confirm opening the app**
+
+A confirmation dialog will appear. Click **Open Anyway** to launch the app.
+
+![Confirm open dialog](images/3_confirm_open.png)
+
+#### Granting Accessibility Permissions
+
+Transcript Recorder uses the macOS Accessibility API to read transcript content from meeting applications. After the app opens for the first time, you must grant it Accessibility access:
+
+1. Open **System Settings → Privacy & Security → Accessibility**
+2. Find **Transcript Recorder.app** in the list
+3. Toggle the switch to **enable** it
+
+![Accessibility permission setting](images/4_allow_accessibility.png)
+
+> **Note:** If Transcript Recorder does not appear in the Accessibility list, click the **+** button, navigate to your Applications folder, and add it manually. You may need to restart the app after granting permissions.
 
 ### From Source
 
@@ -183,9 +217,11 @@ To add support for a new meeting application:
 
 ### "Accessibility permission required"
 
+See [Granting Accessibility Permissions](#granting-accessibility-permissions) above for detailed instructions with screenshots.
+
 1. Open **System Settings** → **Privacy & Security** → **Accessibility**
 2. Click the **+** button and add Transcript Recorder
-3. Ensure the checkbox is enabled
+3. Ensure the toggle is enabled
 4. Restart the application
 
 ### Transcript not capturing
