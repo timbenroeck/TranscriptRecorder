@@ -36,6 +36,13 @@ from transcript_recorder import TranscriptRecorder, AXIsProcessTrusted
 from transcript_utils import smart_merge
 from version import __version__, GITHUB_OWNER, GITHUB_REPO
 
+# macOS-native window privacy (hide from screen sharing / recording)
+try:
+    from AppKit import NSApp
+    _HAS_APPKIT = True
+except ImportError:
+    _HAS_APPKIT = False
+
 # --- Configuration Constants ---
 APP_NAME = "Transcript Recorder"
 APP_VERSION = __version__
@@ -947,6 +954,11 @@ class TranscriptRecorderApp(QMainWindow):
         self._startup_update_worker.update_available.connect(self._on_startup_update_available)
         self._startup_update_worker.start()
         
+        # Default to "hidden from screen sharing" — deferred because the
+        # native NSWindow doesn't exist until after show() is called.
+        if _HAS_APPKIT:
+            QTimer.singleShot(100, lambda: self._toggle_privacy_mode(True))
+        
     def _setup_window(self):
         """Configure main window properties."""
         self.setWindowTitle(APP_NAME)
@@ -1271,6 +1283,15 @@ class TranscriptRecorderApp(QMainWindow):
         self.theme_dark_action.triggered.connect(lambda: self._set_theme("dark"))
         appearance_group.addAction(self.theme_dark_action)
         appearance_menu.addAction(self.theme_dark_action)
+        
+        view_menu.addSeparator()
+        
+        self.privacy_action = QAction("Hide from Screen Sharing", self)
+        self.privacy_action.setCheckable(True)
+        self.privacy_action.setChecked(True)  # Private by default
+        self.privacy_action.setEnabled(_HAS_APPKIT)
+        self.privacy_action.triggered.connect(self._toggle_privacy_mode)
+        view_menu.addAction(self.privacy_action)
         
         view_menu.addSeparator()
         
@@ -1883,6 +1904,32 @@ class TranscriptRecorderApp(QMainWindow):
             f"</ul>"
             f'<p>GitHub: <a href="{github_url}">{github_url}</a></p>'
         )
+    
+    def _toggle_privacy_mode(self, checked: bool):
+        """Toggle macOS window sharing type to hide/show in screen recordings.
+        
+        Uses NSWindow.setSharingType_:
+            0 = NSWindowSharingNone   — invisible to screen capture / sharing
+            1 = NSWindowSharingReadOnly — normal (visible)
+        """
+        if not _HAS_APPKIT:
+            return
+        
+        try:
+            title = self.windowTitle()
+            for ns_window in NSApp().windows():
+                if ns_window.title() == title:
+                    ns_window.setSharingType_(0 if checked else 1)
+                    break
+            
+            if checked:
+                self.statusBar().showMessage("Window hidden from screen sharing")
+                logger.info("Privacy: window hidden from screen sharing")
+            else:
+                self.statusBar().showMessage("Window visible to screen sharing")
+                logger.info("Privacy: window visible to screen sharing")
+        except Exception as e:
+            logger.error(f"Privacy: failed to toggle sharing type: {e}")
     
     def _show_log_viewer(self):
         """Open the log viewer window."""
