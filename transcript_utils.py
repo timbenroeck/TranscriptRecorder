@@ -40,8 +40,7 @@ def smart_merge(
         with open(file2_path, 'r', encoding='utf-8') as f2:
             lines2 = f2.readlines()
 
-        logger.debug(f"smart_merge file1: {file1_path} ({len(lines1)} lines)")
-        logger.debug(f"smart_merge file2: {file2_path} ({len(lines2)} lines)")
+        logger.debug(f"Smart merge: file1={file1_path} ({len(lines1)} lines), file2={file2_path} ({len(lines2)} lines)")
 
         merged_lines: List[str] = []
         overlap_count = 0
@@ -54,10 +53,10 @@ def smart_merge(
             tag == 'equal' and (i2 - i1) >= min_match_length
             for tag, i1, i2, j1, j2 in opcodes
         )
-        logger.debug(f"smart_merge Found meaningful overlap? {'YES' if found_meaningful_overlap else 'NO'}")
+        logger.debug(f"Smart merge: meaningful overlap {'found' if found_meaningful_overlap else 'not found'}")
 
         if not found_meaningful_overlap:
-            logger.debug("smart_merge No meaningful overlap — falling back to appending file1 + file2.")
+            logger.debug("Smart merge: no overlap detected, appending files")
             merged_lines.extend(lines1)
             merged_lines.extend(lines2)
         else:
@@ -76,10 +75,11 @@ def smart_merge(
         with open(output_path, 'w', encoding='utf-8') as out:
             out.writelines(merged_lines)
 
+        logger.debug(f"Smart merge: complete ({len(merged_lines)} lines, {overlap_count} overlap)")
         return True, merged_lines, overlap_count
 
     except Exception as e:
-        logger.error(f"Error during smart_merge: {e}", exc_info=True)
+        logger.error(f"Smart merge: failed: {e}", exc_info=True)
         return False, None, 0
 
 
@@ -158,5 +158,5 @@ def get_transcript_text(file_path: str) -> Optional[str]:
         with open(file_path, 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
-        logger.error(f"Error reading transcript file {file_path}: {e}")
+        logger.error(f"Failed to read transcript file {file_path}: {e}")
         return None

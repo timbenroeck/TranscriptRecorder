@@ -113,6 +113,7 @@ class TranscriptRecorder:
                 self.logger.addHandler(logging.NullHandler())
 
         self.app_identifier = self.app_config.get("name", "UnknownApp")
+        self.logger.debug(f"Recorder initialized for '{self.app_identifier}' (base_dir={self._transcript_base_dir})")
 
 
     @property
@@ -185,7 +186,7 @@ class TranscriptRecorder:
                     if command_paths and current_exe_path:
                         for cmd_path_str in command_paths:
                             if str(Path(cmd_path_str).resolve()) == current_exe_path:
-                                self.logger.debug(f"PID {pid}: Matched by command_path '{cmd_path_str}'.")
+                                self.logger.debug(f"Process search: PID {pid} matched by command_path '{cmd_path_str}'")
                                 _pids.add(pid)
                                 continue # Next proc
 
@@ -193,10 +194,7 @@ class TranscriptRecorder:
                     if app_names and current_name_lower:
                         for lower_app_name in lower_app_names:
                             if lower_app_name in current_name_lower:
-                                if cmdline:
-                                    self.logger.debug(f"PID {pid}: Matched by app_name '{lower_app_name}' in process name '{current_name_lower} with cmdline '{cmdline}'.")
-                                else:
-                                    self.logger.debug(f"PID {pid}: Matched by app_name '{lower_app_name}' in process name '{current_name_lower}.")
+                                self.logger.debug(f"Process search: PID {pid} matched by app_name '{lower_app_name}' in process '{current_name_lower}'")
 
                                 _pids.add(pid)
                                 continue # Next proc
@@ -206,20 +204,20 @@ class TranscriptRecorder:
                         full_cmd_line_lower = ' '.join(cmdline).lower()
                         for app_name_original, lower_app_name in zip(app_names, lower_app_names):
                             if lower_app_name in full_cmd_line_lower:
-                                self.logger.debug(f"PID {pid}: Matched by app_name '{app_name_original}' with cmdline '{cmdline}'.")
+                                self.logger.debug(f"Process search: PID {pid} matched by app_name '{app_name_original}' in cmdline")
                                 _pids.add(pid)
                                 break # Found by one of the app_names in cmdline for this proc
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass
                 except Exception as e:
-                    self.logger.warning(f"Error inspecting process {getattr(proc, 'pid', 'N/A')}: {e}")
+                    self.logger.debug(f"Process search: error inspecting PID {getattr(proc, 'pid', 'N/A')}: {e}")
             return list(_pids)
 
         found_pids_list = await _run_blocking_io(find_pids_sync)
         if not found_pids_list:
-            self.logger.debug(f"No running processes found for '{self.app_identifier}'.")
+            self.logger.debug(f"Process search: no running processes found for '{self.app_identifier}'")
         else:
-            self.logger.debug(f"Found {len(found_pids_list)} candidate process(es) for '{self.app_identifier}': {found_pids_list}")
+            self.logger.debug(f"Process search: found {len(found_pids_list)} process(es) for '{self.app_identifier}': {found_pids_list}")
         return found_pids_list
 
     async def _check_ax_match(self, element: Any, rule_criteria: Dict[str, Any]) -> bool:
@@ -290,9 +288,9 @@ class TranscriptRecorder:
         Returns:
             True if the element is found, False otherwise.
         """
-        self.logger.info(f"Attempting to find transcript element for '{self.app_identifier}'.")
+        self.logger.debug(f"Element search: looking for transcript element for '{self.app_identifier}'")
         if not await _run_blocking_io(AXIsProcessTrusted):
-            self.logger.error("Accessibility permissions are not enabled. Cannot find transcript element.")
+            self.logger.error("Element search: accessibility permissions not granted")
             self._transcript_element = None
             return False
 
@@ -303,28 +301,28 @@ class TranscriptRecorder:
 
         rules_path_options = self.app_config.get("rules_to_find_transcript_table", [])
         if not rules_path_options:
-            self.logger.warning(f"No 'rules_to_find_transcript_table' in app_config for '{self.app_identifier}'.")
+            self.logger.warning(f"Element search: no 'rules_to_find_transcript_table' in config for '{self.app_identifier}'")
             self._transcript_element = None
             return False
 
         roles_to_skip = self.app_config.get("traversal_roles_to_skip", [])
 
         for pid in pids:
-            self.logger.debug(f"Checking PID: {pid} for '{self.app_identifier}'.")
+            self.logger.debug(f"Element search: checking PID {pid} for '{self.app_identifier}'")
             app_ref = await _run_blocking_io(AXUIElementCreateApplication, pid)
             if not app_ref:
-                self.logger.warning(f"Could not create AXUIElement for PID: {pid}.")
+                self.logger.warning(f"Element search: could not create AXUIElement for PID {pid}")
                 continue
 
-            self.logger.debug(f"Created AXUIElement for PID {pid}: {await self._get_element_descriptor(app_ref)}")
+            self.logger.debug(f"Element search: created AXUIElement for PID {pid}: {await self._get_element_descriptor(app_ref)}")
 
             for path_idx, path_option in enumerate(rules_path_options):
                 path_name = path_option.get("path_name", f"PathOption-{path_idx+1}")
-                self.logger.debug(f"Trying rule path '{path_name}' for PID {pid}.")
+                self.logger.debug(f"Element search: trying rule path '{path_name}' for PID {pid}")
                 current_elements_to_search = [app_ref] # Start search from the app root
 
                 for step_idx, step_rule in enumerate(path_option.get("steps", [])):
-                    self.logger.debug(f"Path '{path_name}', Step {step_idx+1}: {step_rule}")
+                    self.logger.debug(f"Element search: path '{path_name}', step {step_idx+1}: {step_rule}")
                     elements_found_this_step: List[Any] = []
                     search_scope = step_rule.get("search_scope", {})
                     levels_deep = search_scope.get("levels_deep", 1) # Default depth
@@ -336,17 +334,17 @@ class TranscriptRecorder:
                         elements_found_this_step.extend(discovered_matches)
 
                     if not elements_found_this_step:
-                        self.logger.debug(f"Path '{path_name}', Step {step_idx+1}: No elements found. Path failed.")
+                        self.logger.debug(f"Element search: path '{path_name}', step {step_idx+1}: no elements found, path failed")
                         current_elements_to_search = [] # Empty list to break outer loop for this path_option
                         break # Move to next path_option
 
                     # Apply index if specified
                     if index_to_select is not None:
                         if 0 <= index_to_select < len(elements_found_this_step):
-                            self.logger.debug(f"Path '{path_name}', Step {step_idx+1}: Applying index {index_to_select} from {len(elements_found_this_step)} matches.")
+                            self.logger.debug(f"Element search: path '{path_name}', step {step_idx+1}: applying index {index_to_select} from {len(elements_found_this_step)} matches")
                             current_elements_to_search = [elements_found_this_step[index_to_select]]
                         else:
-                            self.logger.warning(f"Path '{path_name}', Step {step_idx+1}: Index {index_to_select} out of bounds for {len(elements_found_this_step)} matches. Path failed.")
+                            self.logger.warning(f"Element search: path '{path_name}', step {step_idx+1}: index {index_to_select} out of bounds for {len(elements_found_this_step)} matches")
                             current_elements_to_search = []
                             break # Move to next path_option
                     else:
@@ -355,12 +353,13 @@ class TranscriptRecorder:
 
                 if current_elements_to_search: # If loop completed and elements remain
                     final_target = current_elements_to_search[0] # Take the first one if multiple survived all steps
-                    self.logger.debug(f"SUCCESS: Path '{path_name}' found target element for PID {pid}: {await self._get_element_descriptor(final_target)}")
+                    self.logger.info(f"Element search: found transcript element via path '{path_name}' for PID {pid}")
+                    self.logger.debug(f"Element search: target element: {await self._get_element_descriptor(final_target)}")
                     self._transcript_element = final_target
                     return True
-            self.logger.debug(f"All rule paths exhausted for PID {pid}.")
+            self.logger.debug(f"Element search: all rule paths exhausted for PID {pid}")
 
-        self.logger.warning(f"Transcript element not found after checking all PIDs and rule paths for '{self.app_identifier}'.")
+        self.logger.warning(f"Element search: transcript element not found for '{self.app_identifier}' (checked {len(pids)} PIDs, {len(rules_path_options)} rule paths)")
         self._transcript_element = None
         return False
 
@@ -438,7 +437,7 @@ class TranscriptRecorder:
             try:
                 exclude_re = re.compile(exclude_pattern)
             except Exception as e:
-                self.logger.error("Failed to parse the exclude_pattern. Error: %s", e)
+                self.logger.error("Traversal: failed to parse exclude_pattern: %s", e)
 
         async def process_node(node: Any):
             role = await self._get_ax_attribute(node, kAXRoleAttribute)
@@ -453,7 +452,7 @@ class TranscriptRecorder:
                         values.append(text)
 
         if traversal_mode.lower() == "dfs":
-            self.logger.debug(f"traversal mode is dfs")
+            self.logger.debug(f"Traversal: using DFS mode (depth={effective_levels})")
             async def dfs(node: Any, depth: int):
                 if depth > effective_levels:
                     return
@@ -470,7 +469,7 @@ class TranscriptRecorder:
             await dfs(start_node, 0)
 
         elif traversal_mode.lower() == "bfs":
-            self.logger.debug(f"traversal mode is bfs")
+            self.logger.debug(f"Traversal: using BFS mode (depth={effective_levels})")
             queue = collections.deque([(start_node, 0)])
             while queue:
                 node, depth = queue.popleft()
@@ -496,9 +495,9 @@ class TranscriptRecorder:
                                         row = children[idx]
                                         queue.append((row, depth + 1))
                                 self._transcript_table_export_row = children_count
-                                self.logger.debug(f"Setting export row to {children_count}")
+                                self.logger.debug(f"Traversal: incremental export, starting from row {first_new_index} of {children_count}")
                         except Exception as e:
-                            self.logger.error("Failed to retrieve AXRows from transcript: %s", e)
+                            self.logger.error("Traversal: failed to retrieve AXRows from transcript: %s", e)
                     else:
                         for child in children:
                             queue.append((child, depth + 1))
@@ -522,7 +521,7 @@ class TranscriptRecorder:
         if not self._transcript_element:
             ok = await self.find_transcript_element()
             if not ok:
-                self.logger.error("Cannot export text: no transcript element found.")
+                self.logger.warning("Export: no transcript element found, cannot export")
                 return False, None, None
 
         serialization_export_depth = self.app_config.get("serialization_export_depth", 15)
@@ -537,10 +536,10 @@ class TranscriptRecorder:
         lines = await self._collect_text_values(self._transcript_element, levels_to_search=serialization_export_depth, roles_to_include=text_element_roles, roles_to_skip=roles_to_skip, traversal_mode=traversal_mode, exclude_pattern=exclude_pattern, incremental_export=incremental_export )
 
         if not lines:
-            self.logger.debug("No text values found for roles %s", text_element_roles)
+            self.logger.debug("Export: no text values found for roles %s, retrying element search", text_element_roles)
             ok = await self.find_transcript_element()
             if not ok:
-                self.logger.error("Cannot export text: no transcript element found.")
+                self.logger.warning("Export: transcript element not found on retry")
             return False, None, None
 
         # 2) build output path
@@ -555,7 +554,7 @@ class TranscriptRecorder:
         try:
             await _run_blocking_io(out_dir.mkdir, parents=True, exist_ok=True)
         except Exception as e:
-            self.logger.error("Failed to create directory %s: %s", out_dir, e)
+            self.logger.error("Export: failed to create directory %s: %s", out_dir, e)
             return False, None, None
 
         # 4) write it out
@@ -565,7 +564,7 @@ class TranscriptRecorder:
                 for line in lines:
                     await f.write(line + "\n")
                     text_count += 1
-            self.logger.info("Transcript text exported to %s", full_path_text)
+            self.logger.info("Export: snapshot saved (%d lines) to %s", text_count, full_path_text)
             snapshot_info: Dict[str, Union[str, int]] = {
                 "file_path": str(full_path_text),
                 "timestamp": timestamp.isoformat(), # Storing full ISO timestamp
@@ -575,7 +574,7 @@ class TranscriptRecorder:
 
             if serialization_save_json:
                 try:
-                    self.logger.debug("Starting serialization to JSON")
+                    self.logger.debug("Export: serializing accessibility tree to JSON")
                     out_dir_json = Path(f"{out_dir}/json").expanduser()
                     full_path_json = f"{out_dir_json}/{fname}.json"
 
@@ -585,14 +584,14 @@ class TranscriptRecorder:
                     async with aiofiles.open(full_path_json, 'w', encoding='utf-8') as f:
                         await f.write(json.dumps(sdata, indent=2))
                 except IOError as e:
-                    self.logger.error(f"IOError writing json file to {full_path_json}: {e}")
-                except Exception as e: # Catch other potential errors
-                    self.logger.error(f"Unexpected error during snapshot export to {full_path_json}: {e}")
+                    self.logger.error(f"Export: failed to write JSON to {full_path_json}: {e}")
+                except Exception as e:
+                    self.logger.error(f"Export: unexpected error writing JSON to {full_path_json}: {e}")
 
             return True, str(full_path_text), text_count
 
         except Exception as e:
-            self.logger.error("Failed to write transcript text file: %s", e)
+            self.logger.error("Export: failed to write transcript text file: %s", e)
             return False, None, None
 
     async def export_snapshots_index(self, filename: str = "snapshots_index.json") -> Tuple[bool, Optional[str]]:
@@ -607,8 +606,7 @@ class TranscriptRecorder:
             A tuple: (success_bool, file_path_str_or_None).
         """
         if not self._snapshots_info:
-            self.logger.warning("No snapshots recorded; index will be empty or not written.")
-            # Decide if an empty index file should be written. Let's write it.
+            self.logger.debug("Index export: no snapshots recorded, writing empty index")
 
         index_file_path = self.transcript_base_dir / filename
         try:
@@ -617,19 +615,19 @@ class TranscriptRecorder:
 
             async with aiofiles.open(index_file_path, 'w', encoding='utf-8') as f:
                 await f.write(json.dumps(self._snapshots_info, indent=2))
-            self.logger.info(f"Snapshots index exported to: {index_file_path}")
+            self.logger.info(f"Index export: saved {len(self._snapshots_info)} entries to {index_file_path}")
             return True, str(index_file_path)
         except IOError as e:
-            self.logger.error(f"IOError writing snapshots index to {index_file_path}: {e}")
+            self.logger.error(f"Index export: failed to write to {index_file_path}: {e}")
         except Exception as e:
-            self.logger.error(f"Unexpected error during index export to {index_file_path}: {e}")
+            self.logger.error(f"Index export: unexpected error writing to {index_file_path}: {e}")
 
         return False, None
 
     def clear_snapshots_list(self):
         """Clears the internal list of snapshot information."""
         self._snapshots_info = []
-        self.logger.debug("Internal snapshots list has been cleared.")
+        self.logger.debug("Snapshots list cleared")
 
     async def merge_snapshots(self, output_filename: str = "transcript_merged.txt", 
                               min_match_length: int = 5) -> Tuple[bool, Optional[str], int]:
@@ -649,7 +647,7 @@ class TranscriptRecorder:
         import difflib
         
         if not self._snapshots_info:
-            self.logger.warning("No snapshots to merge")
+            self.logger.warning("Merge: no snapshots to merge")
             return False, None, 0
             
         if len(self._snapshots_info) == 1:
@@ -704,9 +702,9 @@ class TranscriptRecorder:
             async with aiofiles.open(output_path, 'w', encoding='utf-8') as f:
                 await f.writelines(merged_lines)
             
-            self.logger.info(f"Merged {len(self._snapshots_info)} snapshots to {output_path}")
+            self.logger.info(f"Merge: combined {len(self._snapshots_info)} snapshots into {output_path} ({total_overlap} overlapping lines removed)")
             return True, str(output_path), total_overlap
             
         except Exception as e:
-            self.logger.error(f"Error merging snapshots: {e}", exc_info=True)
+            self.logger.error(f"Merge: failed to merge snapshots: {e}", exc_info=True)
             return False, None, 0

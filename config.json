@@ -1,6 +1,6 @@
 {
   "logging": {
-    "level": "DEBUG",
+    "level": "INFO",
     "log_to_file": true,
     "log_file_name": "tr_client.log"
   },

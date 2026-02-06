@@ -7,6 +7,7 @@ accessibility APIs. Supports Zoom, Microsoft Teams, WebEx, and Slack.
 import asyncio
 import json
 import logging
+import logging.handlers
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,7 @@ from PyQt6.QtWidgets import (
     QLabel, QComboBox, QPushButton, QTextEdit, QProgressBar,
     QMessageBox, QFileDialog, QStatusBar, QGroupBox, QSpinBox,
     QSplitter, QFrame, QSizePolicy, QSystemTrayIcon, QMenu,
-    QTabWidget, QLineEdit
+    QTabWidget, QLineEdit, QStyle
 )
 
 from transcript_recorder import TranscriptRecorder, AXIsProcessTrusted
@@ -81,12 +82,17 @@ def setup_logging(config: Optional[Dict] = None):
     logger.addHandler(console_handler)
     tr_lib_logger.addHandler(console_handler)
     
-    # File handler
+    # File handler (rotating: 2 MB max, keep 3 backups)
     if log_to_file:
         try:
             DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
             current_log_file_path = DEFAULT_LOG_DIR / log_file_name
-            file_handler = logging.FileHandler(current_log_file_path, mode='a')
+            file_handler = logging.handlers.RotatingFileHandler(
+                current_log_file_path,
+                maxBytes=2 * 1024 * 1024,  # 2 MB
+                backupCount=3,
+                encoding='utf-8'
+            )
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
             tr_lib_logger.addHandler(file_handler)
@@ -247,7 +253,7 @@ class LogViewerDialog(QMainWindow):
         self._load_log()
     
     def _load_log(self):
-        """Load log file contents."""
+        """Load the last 200 lines of the log file."""
         log_path = current_log_file_path
         if log_path is None:
             self.log_text.setPlainText("File logging is disabled in configuration.")
@@ -255,9 +261,16 @@ class LogViewerDialog(QMainWindow):
             
         try:
             if log_path.exists():
+                max_lines = 200
                 with open(log_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                self.log_text.setPlainText(content if content else "(Log file is empty)")
+                    all_lines = f.readlines()
+                if not all_lines:
+                    self.log_text.setPlainText("(Log file is empty)")
+                    return
+                tail_lines = all_lines[-max_lines:]
+                truncated = len(all_lines) > max_lines
+                header = f"--- Showing last {len(tail_lines)} of {len(all_lines)} lines ---\n\n" if truncated else ""
+                self.log_text.setPlainText(header + "".join(tail_lines))
                 # Scroll to bottom
                 cursor = self.log_text.textCursor()
                 cursor.movePosition(cursor.MoveOperation.End)
@@ -285,7 +298,7 @@ class LogViewerDialog(QMainWindow):
                     with open(log_path, 'w', encoding='utf-8') as f:
                         f.write("")
                     self._load_log()
-                    logger.info("Log file cleared by user")
+                    logger.info("Log viewer: log file cleared by user")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to clear log file: {e}")
 
@@ -344,15 +357,15 @@ class ConfigEditorDialog(QMainWindow):
         self.reload_btn.clicked.connect(self._load_config)
         btn_layout.addWidget(self.reload_btn)
         
-        self.validate_btn = QPushButton("Validate JSON")
-        self.validate_btn.setStyleSheet(primary_style)
-        self.validate_btn.clicked.connect(self._validate_json)
-        btn_layout.addWidget(self.validate_btn)
-        
-        self.download_btn = QPushButton("Download from URL...")
+        self.download_btn = QPushButton("Download from URL")
         self.download_btn.setStyleSheet(secondary_style)
         self.download_btn.clicked.connect(self._download_from_url)
         btn_layout.addWidget(self.download_btn)
+        
+        self.restore_btn = QPushButton("Restore Packaged Config")
+        self.restore_btn.setStyleSheet(secondary_style)
+        self.restore_btn.clicked.connect(self._restore_packaged_config)
+        btn_layout.addWidget(self.restore_btn)
         
         btn_layout.addStretch()
         
@@ -360,6 +373,11 @@ class ConfigEditorDialog(QMainWindow):
         self.save_btn.setStyleSheet(success_style)
         self.save_btn.clicked.connect(self._save_config)
         btn_layout.addWidget(self.save_btn)
+        
+        self.validate_btn = QPushButton("Validate JSON")
+        self.validate_btn.setStyleSheet(primary_style)
+        self.validate_btn.clicked.connect(self._validate_json)
+        btn_layout.addWidget(self.validate_btn)
         
         self.close_btn = QPushButton("Close")
         self.close_btn.setStyleSheet(secondary_style)
@@ -428,7 +446,7 @@ class ConfigEditorDialog(QMainWindow):
             self._is_modified = False
             self.status_label.setText("✓ Configuration saved")
             self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
-            logger.info("Configuration file saved")
+            logger.info(f"Config editor: saved to {DEFAULT_CONFIG_PATH}")
             self.config_saved.emit()
             
         except Exception as e:
@@ -480,7 +498,7 @@ class ConfigEditorDialog(QMainWindow):
             self._is_modified = True
             self.status_label.setText(f"✓ Downloaded from URL (click Save to apply)")
             self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
-            logger.info(f"Configuration downloaded from {url}")
+            logger.info(f"Config editor: downloaded config from {url}")
             
         except urllib.error.HTTPError as e:
             self.status_label.setText(f"✗ HTTP Error {e.code}")
@@ -499,10 +517,61 @@ class ConfigEditorDialog(QMainWindow):
         except Exception as e:
             self.status_label.setText("✗ Download failed")
             self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
-            logger.exception("Failed to download configuration from URL")
+            logger.error("Config editor: failed to download config from URL", exc_info=True)
             QMessageBox.critical(
                 self, "Download Error",
                 f"Failed to download configuration:\n{e}"
+            )
+    
+    def _restore_packaged_config(self):
+        """Restore the bundled/packaged config into the editor."""
+        bundled_config = resource_path("config.json")
+        if not bundled_config.exists():
+            self.status_label.setText("✗ Packaged config not found")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            QMessageBox.warning(
+                self, "Restore Error",
+                "Could not find the packaged configuration file.\n\n"
+                "This may happen if the application was not installed properly."
+            )
+            return
+        
+        reply = QMessageBox.question(
+            self, "Restore Packaged Config",
+            "This will replace the editor contents with the packaged default configuration.\n\n"
+            "Your current config will NOT be overwritten until you click Save.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        try:
+            with open(bundled_config, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Validate the bundled config is valid JSON
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as e:
+                self.status_label.setText(f"✗ Packaged config is not valid JSON: {e}")
+                self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+                return
+            
+            self.config_text.setPlainText(content)
+            self._is_modified = True
+            self.status_label.setText("✓ Packaged config restored (click Save to apply)")
+            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            logger.info("Config editor: restored packaged config into editor")
+            
+        except Exception as e:
+            self.status_label.setText("✗ Failed to restore packaged config")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            logger.error("Config editor: failed to restore packaged config", exc_info=True)
+            QMessageBox.critical(
+                self, "Restore Error",
+                f"Failed to read packaged configuration:\n{e}"
             )
     
     def closeEvent(self, event):
@@ -539,6 +608,7 @@ class RecordingWorker(QThread):
         
     def run(self):
         """Main recording loop."""
+        logger.info(f"Auto capture started (interval={self.interval_seconds}s, app={self.recorder.app_identifier})")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -557,6 +627,7 @@ class RecordingWorker(QThread):
                 # Export snapshot
                 self.countdown_tick.emit(0)
                 try:
+                    logger.debug(f"Auto capture: taking snapshot #{self.snapshot_count + 1}")
                     success, file_path, line_count = loop.run_until_complete(
                         self.recorder.export_transcript_text()
                     )
@@ -569,6 +640,7 @@ class RecordingWorker(QThread):
                         if self.snapshot_count == 1:
                             # First snapshot - just copy to merged location
                             shutil.copy(file_path, str(self.merged_transcript_path))
+                            logger.info(f"Auto capture: first snapshot saved ({line_count} lines)")
                         else:
                             # Merge with existing transcript
                             merge_success, _, overlap_count = smart_merge(
@@ -576,24 +648,28 @@ class RecordingWorker(QThread):
                                 file_path,
                                 str(self.merged_transcript_path)
                             )
+                            logger.info(f"Auto capture: snapshot #{self.snapshot_count} merged ({line_count} lines, {overlap_count} overlap)")
                         
                         # Always return the merged transcript path for display
                         self.snapshot_completed.emit(True, str(self.merged_transcript_path), line_count or 0, overlap_count)
                     else:
+                        logger.debug("Auto capture: snapshot returned no data")
                         self.snapshot_completed.emit(False, "", 0, 0)
                         
                 except Exception as e:
-                    logger.error(f"Error during snapshot: {e}", exc_info=True)
+                    logger.error(f"Auto capture: snapshot failed: {e}", exc_info=True)
                     self.error_occurred.emit(str(e))
                     
         except Exception as e:
-            logger.error(f"Recording worker error: {e}", exc_info=True)
+            logger.error(f"Auto capture: worker thread error: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
         finally:
+            logger.info(f"Auto capture stopped after {self.snapshot_count} snapshots")
             loop.close()
     
     def stop(self):
         """Signal the worker to stop."""
+        logger.debug("Auto capture: stop requested")
         self._is_running = False
 
 
@@ -607,12 +683,12 @@ class UpdateCheckWorker(QThread):
         """Check GitHub releases for a newer version."""
         try:
             if GITHUB_OWNER == "YOUR_GITHUB_USERNAME":
-                logger.debug("Startup update check skipped: GITHUB_OWNER not configured")
+                logger.debug("Startup update check: skipped (GITHUB_OWNER not configured)")
                 self.check_finished.emit()
                 return
             
             url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-            logger.debug(f"Startup update check: querying {url}")
+            logger.debug(f"Startup update check: querying GitHub API")
             
             request = urllib.request.Request(
                 url,
@@ -798,18 +874,24 @@ class TranscriptRecorderApp(QMainWindow):
         datetime_layout.addWidget(datetime_label)
         
         self.meeting_datetime_input = QLineEdit()
-        self.meeting_datetime_input.setPlaceholderText("MM/DD/YYYY hh:mm AM/PM")
         self.meeting_datetime_input.textChanged.connect(self._on_meeting_details_changed)
         datetime_layout.addWidget(self.meeting_datetime_input, stretch=1)
         
+        # 1. Grab the native system icons once
+        style = self.style()
+        icon_up = style.standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
+        icon_down = style.standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
+
         # Round time buttons (right-aligned)
-        self.time_down_btn = QPushButton("▼")
+        self.time_down_btn = QPushButton()
+        self.time_down_btn.setIcon(icon_down)
         self.time_down_btn.setFixedWidth(36)
         self.time_down_btn.setToolTip("Round time down by 5 minutes")
         self.time_down_btn.clicked.connect(self._on_round_time_down)
         datetime_layout.addWidget(self.time_down_btn)
         
-        self.time_up_btn = QPushButton("▲")
+        self.time_up_btn = QPushButton()
+        self.time_up_btn.setIcon(icon_up)
         self.time_up_btn.setFixedWidth(36)
         self.time_up_btn.setToolTip("Round time up by 5 minutes")
         self.time_up_btn.clicked.connect(self._on_round_time_up)
@@ -1383,8 +1465,9 @@ class TranscriptRecorderApp(QMainWindow):
                 bundled_config = resource_path("config.json")
                 if bundled_config.exists():
                     shutil.copy(bundled_config, config_path)
-                    logger.info(f"Created config at {config_path}")
+                    logger.info(f"Config: copied bundled config to {config_path}")
                 else:
+                    logger.error("Config: bundled config not found; cannot initialize")
                     QMessageBox.critical(
                         self, "Configuration Error",
                         "Could not find configuration file. Please reinstall the application."
@@ -1406,7 +1489,9 @@ class TranscriptRecorderApp(QMainWindow):
             # Populate app selection
             self._populate_app_combo()
             
-            logger.info(f"Configuration loaded from {config_path}")
+            app_count = self.config.get("application_settings", {})
+            log_level = self.config.get("logging", {}).get("level", "INFO")
+            logger.info(f"Config: loaded from {config_path} ({len(app_count)} apps, log_level={log_level})")
             self.statusBar().showMessage(f"Configuration loaded")
             
         except json.JSONDecodeError as e:
@@ -1452,9 +1537,9 @@ class TranscriptRecorderApp(QMainWindow):
                 self.statusBar().showMessage("⚠️ Accessibility permission required")
             else:
                 self.new_btn.setEnabled(True)
-                logger.info("Accessibility permissions granted")
+                logger.info("Permissions: accessibility access granted")
         except Exception as e:
-            logger.error(f"Permission check failed: {e}")
+            logger.error(f"Permissions: check failed: {e}")
             
     def _on_startup_update_available(self, version: str, release_url: str, notes: str, assets: list):
         """Handle notification that a new version is available (from background check)."""
@@ -1476,16 +1561,18 @@ class TranscriptRecorderApp(QMainWindow):
         if self.selected_app_key and self.config:
             app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
             self.capture_interval = app_config.get("monitor_interval_seconds", 30)
-            logger.debug(f"Selected app: {self.selected_app_key} (interval: {self.capture_interval}s)")
+            logger.debug(f"App selection changed: {self.selected_app_key} (capture interval: {self.capture_interval}s)")
             
     def _on_new_recording(self):
         """Start a new recording session."""
         if not self.selected_app_key or not self.config:
+            logger.warning("New session: no application selected")
             QMessageBox.warning(self, "No Application", "Please select a meeting application first.")
             return
             
         app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
         if not app_config:
+            logger.error(f"New session: no config found for {self.selected_app_key}")
             QMessageBox.warning(self, "Configuration Error", f"No configuration found for {self.selected_app_key}")
             return
             
@@ -1506,6 +1593,7 @@ class TranscriptRecorderApp(QMainWindow):
         try:
             self.current_recording_path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
+            logger.error(f"New session: failed to create recording folder: {e}")
             QMessageBox.critical(self, "Error", f"Failed to create recording folder:\n{e}")
             return
             
@@ -1517,6 +1605,7 @@ class TranscriptRecorderApp(QMainWindow):
         try:
             self.recorder_instance = TranscriptRecorder(app_config=tr_config, logger=logger)
         except Exception as e:
+            logger.error(f"New session: failed to initialize recorder: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Failed to initialize recorder:\n{e}")
             return
             
@@ -1534,6 +1623,7 @@ class TranscriptRecorderApp(QMainWindow):
         self._update_button_states()
         self.statusBar().showMessage(f"Ready to record — {folder_name}")
         self._set_status("Session ready", "green")
+        logger.info(f"New session: created for {self.selected_app_key} at {self.current_recording_path}")
     
     def _on_reset_recording(self):
         """Reset the current recording session."""
@@ -1557,10 +1647,12 @@ class TranscriptRecorderApp(QMainWindow):
         self._update_button_states()
         self._set_status("Ready", "gray")
         self.statusBar().showMessage("Session reset")
+        logger.info("Session reset")
         
     def _on_start_recording(self):
         """Start continuous recording."""
         if not self.recorder_instance:
+            logger.warning("Start recording: no active session")
             return
         
         # Switch to transcript tab
@@ -1581,9 +1673,11 @@ class TranscriptRecorderApp(QMainWindow):
         self._update_button_states()
         self._set_status("Auto capturing...", "#2ecc71")
         self.statusBar().showMessage(f"Auto capture running (every {self.capture_interval}s)")
+        logger.info(f"Recording started: auto capture every {self.capture_interval}s")
         
     def _on_stop_recording(self):
         """Stop continuous recording."""
+        logger.info(f"Recording stopped (snapshots taken: {self.snapshot_count})")
         if self.recording_worker:
             self.recording_worker.stop()
             self.recording_worker.wait(5000)  # Wait up to 5 seconds
@@ -1598,6 +1692,7 @@ class TranscriptRecorderApp(QMainWindow):
             loop = asyncio.new_event_loop()
             try:
                 loop.run_until_complete(self.recorder_instance.export_snapshots_index())
+                logger.debug("Snapshots index file exported")
             finally:
                 loop.close()
                 
@@ -1606,6 +1701,7 @@ class TranscriptRecorderApp(QMainWindow):
     def _on_capture_now(self):
         """Take a single snapshot and merge into meeting transcript."""
         if not self.recorder_instance:
+            logger.warning("Manual capture: no active session")
             return
         
         # Switch to transcript tab
@@ -1613,6 +1709,7 @@ class TranscriptRecorderApp(QMainWindow):
             
         self._set_status("Capturing...", "blue")
         self.statusBar().showMessage("Capturing transcript...")
+        logger.debug("Manual capture: starting")
         
         loop = asyncio.new_event_loop()
         try:
@@ -1627,6 +1724,7 @@ class TranscriptRecorderApp(QMainWindow):
                 if self.snapshot_count == 1:
                     # First snapshot - just copy to merged location
                     shutil.copy(file_path, str(self.merged_transcript_path))
+                    logger.info(f"Manual capture: first snapshot saved ({line_count} lines)")
                 else:
                     # Merge with existing transcript
                     smart_merge(
@@ -1634,6 +1732,7 @@ class TranscriptRecorderApp(QMainWindow):
                         file_path,
                         str(self.merged_transcript_path)
                     )
+                    logger.info(f"Manual capture: snapshot #{self.snapshot_count} merged ({line_count} lines)")
                 
                 # Save meeting details if modified
                 self._save_meeting_details()
@@ -1643,6 +1742,7 @@ class TranscriptRecorderApp(QMainWindow):
                 self.statusBar().showMessage(f"Captured {line_count} lines")
                 self._set_status("Captured", "green")
             else:
+                logger.warning("Manual capture: no transcript data returned")
                 QMessageBox.warning(
                     self, "Capture Failed",
                     "Could not capture transcript. Make sure:\n"
@@ -1652,7 +1752,7 @@ class TranscriptRecorderApp(QMainWindow):
                 )
                 self._set_status("Capture failed", "red")
         except Exception as e:
-            logger.error(f"Capture error: {e}", exc_info=True)
+            logger.error(f"Manual capture: failed: {e}", exc_info=True)
             QMessageBox.critical(self, "Error", f"Capture failed:\n{e}")
         finally:
             loop.close()
@@ -1693,8 +1793,9 @@ class TranscriptRecorderApp(QMainWindow):
             
             self.copy_btn.setEnabled(True)
             self.open_folder_btn.setEnabled(True)
+            logger.debug(f"Transcript display updated ({actual_lines} lines)")
         except Exception as e:
-            logger.error(f"Error updating transcript display: {e}")
+            logger.error(f"Failed to update transcript display: {e}")
             
     def _on_copy_transcript(self):
         """Copy transcript to clipboard."""
@@ -1848,7 +1949,7 @@ class TranscriptRecorderApp(QMainWindow):
             self.meeting_details_dirty = False
             logger.debug(f"Meeting details saved to {details_path}")
         except Exception as e:
-            logger.error(f"Error saving meeting details: {e}")
+            logger.error(f"Failed to save meeting details: {e}")
     
     def _on_save_details_clicked(self):
         """Handle save details button click."""
@@ -1902,7 +2003,8 @@ class TranscriptRecorderApp(QMainWindow):
             # Repopulate app selection
             self._populate_app_combo()
             
-            logger.info("Configuration reloaded")
+            app_count = len(self.config.get("application_settings", {}))
+            logger.info(f"Config: reloaded from {DEFAULT_CONFIG_PATH} ({app_count} apps)")
             self.statusBar().showMessage("Configuration reloaded")
             
         except json.JSONDecodeError as e:
@@ -1933,7 +2035,7 @@ class TranscriptRecorderApp(QMainWindow):
                 if current_log_file_path.exists():
                     with open(current_log_file_path, 'w', encoding='utf-8') as f:
                         f.write("")
-                    logger.info("Log file cleared")
+                    logger.info("Maintenance: log file cleared")
                     self.statusBar().showMessage("Log file cleared")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to clear log file: {e}")
@@ -1970,7 +2072,7 @@ class TranscriptRecorderApp(QMainWindow):
                     shutil.rmtree(folder)
                     removed += 1
                 except Exception as e:
-                    logger.error(f"Failed to remove {folder}: {e}")
+                    logger.error(f"Maintenance: failed to remove snapshot folder {folder}: {e}")
                     errors += 1
             
             if errors > 0:
@@ -1984,7 +2086,7 @@ class TranscriptRecorderApp(QMainWindow):
                     f"Removed {removed} snapshot folder(s)."
                 )
             
-            logger.info(f"Cleared {removed} snapshot folders ({errors} errors)")
+            logger.info(f"Maintenance: cleared {removed} snapshot folders ({errors} errors)")
             self.statusBar().showMessage(f"Cleared {removed} snapshot folders")
     
     def _clear_empty_recordings(self):
@@ -2033,7 +2135,7 @@ class TranscriptRecorderApp(QMainWindow):
                     shutil.rmtree(folder)
                     removed += 1
                 except Exception as e:
-                    logger.error(f"Failed to remove empty folder {folder}: {e}")
+                    logger.error(f"Maintenance: failed to remove empty folder {folder}: {e}")
                     errors += 1
             
             if errors > 0:
@@ -2047,7 +2149,7 @@ class TranscriptRecorderApp(QMainWindow):
                     f"Removed {removed} empty recording folder(s)."
                 )
             
-            logger.info(f"Cleared {removed} empty recording folders ({errors} errors)")
+            logger.info(f"Maintenance: cleared {removed} empty recording folders ({errors} errors)")
             self.statusBar().showMessage(f"Cleared {removed} empty recording folders")
     
     def _check_for_updates(self):
@@ -2056,7 +2158,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Check if GitHub info is configured
         if GITHUB_OWNER == "YOUR_GITHUB_USERNAME":
-            logger.warning("Update check skipped: GITHUB_OWNER not configured")
+            logger.warning("Update check: skipped (GITHUB_OWNER not configured)")
             QMessageBox.information(
                 self, "Update Check",
                 "Update checking is not configured.\n\n"
@@ -2068,8 +2170,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Build the API URL
         url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-        logger.debug(f"Checking for updates at: {url}")
-        logger.debug(f"Current version: {APP_VERSION}")
+        logger.debug(f"Update check: querying {url} (current version: {APP_VERSION})")
         
         try:
             # Query GitHub releases API
@@ -2078,7 +2179,7 @@ class TranscriptRecorderApp(QMainWindow):
                 headers={"Accept": "application/vnd.github.v3+json", "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
             )
             
-            logger.debug("Sending request to GitHub API...")
+            logger.debug("Update check: sending request to GitHub API")
             with urllib.request.urlopen(request, timeout=10) as response:
                 data = json.loads(response.read().decode('utf-8'))
             
@@ -2087,9 +2188,7 @@ class TranscriptRecorderApp(QMainWindow):
             release_notes = data.get("body", "No release notes available.")
             assets = data.get("assets", [])
             
-            logger.debug(f"Latest release version: {latest_version}")
-            logger.debug(f"Release URL: {release_url}")
-            logger.debug(f"Number of assets: {len(assets)}")
+            logger.debug(f"Update check: latest release={latest_version}, assets={len(assets)}")
             
             # Compare versions
             current_parts = [int(x) for x in APP_VERSION.split(".")]
@@ -2101,16 +2200,16 @@ class TranscriptRecorderApp(QMainWindow):
             while len(latest_parts) < len(current_parts):
                 latest_parts.append(0)
             
-            logger.debug(f"Version comparison: current={current_parts}, latest={latest_parts}")
+            logger.debug(f"Update check: comparing versions current={current_parts} vs latest={latest_parts}")
             
             if latest_parts > current_parts:
-                logger.info(f"New version available: {latest_version} (current: {APP_VERSION})")
+                logger.info(f"Update check: new version available ({latest_version}, current: {APP_VERSION})")
                 # Newer version available
                 # Find the .dmg or .zip asset
                 download_asset = None
                 for asset in assets:
                     name = asset.get("name", "").lower()
-                    logger.debug(f"Found asset: {name}")
+                    logger.debug(f"Update check: found asset: {name}")
                     if name.endswith(".dmg") or name.endswith(".zip"):
                         download_asset = asset
                         break
@@ -2123,7 +2222,7 @@ class TranscriptRecorderApp(QMainWindow):
                 )
                 
                 if download_asset:
-                    logger.debug(f"Download asset found: {download_asset.get('name')}")
+                    logger.debug(f"Update check: downloadable asset found: {download_asset.get('name')}")
                     reply = QMessageBox.question(
                         self, "Update Available",
                         f"{msg}\n\nWould you like to download and install the update?",
@@ -2133,7 +2232,7 @@ class TranscriptRecorderApp(QMainWindow):
                     if reply == QMessageBox.StandardButton.Yes:
                         self._download_and_install_update(download_asset, latest_version)
                 else:
-                    logger.debug("No downloadable asset (.dmg or .zip) found")
+                    logger.debug("Update check: no downloadable asset (.dmg or .zip) found")
                     # No downloadable asset, just show the release page
                     reply = QMessageBox.question(
                         self, "Update Available",
@@ -2143,7 +2242,7 @@ class TranscriptRecorderApp(QMainWindow):
                     if reply == QMessageBox.StandardButton.Yes:
                         subprocess.run(["open", release_url])
             else:
-                logger.info(f"Already running latest version ({APP_VERSION})")
+                logger.info(f"Update check: already on latest version ({APP_VERSION})")
                 QMessageBox.information(
                     self, "No Updates",
                     f"You're running the latest version ({APP_VERSION})."
@@ -2153,7 +2252,7 @@ class TranscriptRecorderApp(QMainWindow):
             
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                logger.warning(f"No releases found at {url} (HTTP 404)")
+                logger.warning(f"Update check: no releases found (HTTP 404)")
                 QMessageBox.information(
                     self, "No Releases",
                     f"No releases have been published yet.\n\n"
@@ -2161,24 +2260,21 @@ class TranscriptRecorderApp(QMainWindow):
                     f"Checked: {url}"
                 )
             else:
-                logger.error(f"HTTP error checking for updates: {e.code} {e.reason}")
-                logger.error(f"URL: {url}")
+                logger.error(f"Update check: HTTP error {e.code} {e.reason} ({url})")
                 QMessageBox.warning(
                     self, "Update Check Failed",
                     f"HTTP Error {e.code}: {e.reason}\n\nURL: {url}"
                 )
             self.statusBar().showMessage("Ready")
         except urllib.error.URLError as e:
-            logger.error(f"Failed to check for updates: {e}")
-            logger.error(f"URL: {url}")
+            logger.error(f"Update check: connection failed: {e} ({url})")
             QMessageBox.warning(
                 self, "Update Check Failed",
                 f"Could not connect to GitHub to check for updates.\n\nError: {e}\n\nURL: {url}"
             )
             self.statusBar().showMessage("Update check failed")
         except Exception as e:
-            logger.error(f"Update check error: {e}", exc_info=True)
-            logger.error(f"URL: {url}")
+            logger.error(f"Update check: unexpected error: {e} ({url})", exc_info=True)
             QMessageBox.warning(
                 self, "Update Check Failed",
                 f"An error occurred while checking for updates.\n\nError: {e}\n\nURL: {url}"
@@ -2191,6 +2287,7 @@ class TranscriptRecorderApp(QMainWindow):
         filename = asset.get("name")
         
         if not download_url or not filename:
+            logger.error("Update download: missing download URL or filename")
             QMessageBox.warning(self, "Download Failed", "Could not get download URL.")
             return
         
@@ -2212,7 +2309,7 @@ class TranscriptRecorderApp(QMainWindow):
                 with open(download_path, 'wb') as f:
                     f.write(response.read())
             
-            logger.info(f"Downloaded update to {download_path}")
+            logger.info(f"Update download: saved {filename} to {download_path}")
             
             if filename.endswith(".dmg"):
                 # Mount DMG and open it
@@ -2242,7 +2339,7 @@ class TranscriptRecorderApp(QMainWindow):
             self.statusBar().showMessage("Update ready to install")
             
         except Exception as e:
-            logger.error(f"Failed to download update: {e}", exc_info=True)
+            logger.error(f"Update download: failed to download {filename}: {e}", exc_info=True)
             QMessageBox.warning(
                 self, "Download Failed",
                 f"Failed to download the update.\n\nError: {e}"
@@ -2266,7 +2363,8 @@ class TranscriptRecorderApp(QMainWindow):
             
         if hasattr(self, 'tray_icon'):
             self.tray_icon.hide()
-            
+        
+        logger.info("Application window closed")
         event.accept()
 
 
@@ -2288,11 +2386,15 @@ def main():
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     
+    logger.info(f"Application starting (version {APP_VERSION})")
+    
     # Create and show main window
     window = TranscriptRecorderApp()
     window.show()
     
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    logger.info(f"Application exiting (code {exit_code})")
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
