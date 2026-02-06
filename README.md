@@ -152,6 +152,43 @@ To add support for a new meeting application:
 4. Define rules to locate the transcript element
 5. Save and reload configuration
 
+## Menu Reference
+
+### File
+
+| Menu Item | Shortcut | Description |
+|-----------|----------|-------------|
+| **New Recording** | `Cmd+N` | Creates a new recording session with a timestamped folder |
+| **Reset** | `Cmd+R` | Stops any active capture and resets the session, returning the UI to its initial state |
+| **Open Export Folder** | `Cmd+O` | Opens the base export directory in Finder |
+
+### Edit
+
+| Menu Item | Shortcut | Description |
+|-----------|----------|-------------|
+| **Copy Transcript** | `Cmd+C` | Copies the current merged transcript text to the clipboard |
+
+### View
+
+| Menu Item | Shortcut | Description |
+|-----------|----------|-------------|
+| **Appearance** | | Submenu to switch between **System**, **Light**, and **Dark** themes |
+| **Log File...** | `Cmd+L` | Opens a log viewer window showing the application log with refresh and clear options |
+| **Preferences...** | `Cmd+,` | Opens the configuration editor (also available via the macOS app menu) |
+
+### Maintenance
+
+| Menu Item | Description |
+|-----------|-------------|
+| **Edit Configuration...** | Opens the JSON configuration editor where you can view, validate, save, or download a config from a URL |
+| **Reload Configuration** | Reloads `config.json` from disk and refreshes the application dropdown without restarting |
+| **Clear Log File** | Clears the contents of the application log file |
+| **Clear All Snapshots** | Removes all `.snapshots` folders from past recordings while preserving merged transcripts |
+| **Clear Empty Recordings** | Removes recording folders that contain no files (e.g. sessions that were started but never captured). Skips the currently active session |
+| **Check Permissions** | Verifies that macOS Accessibility permissions are granted and prompts if not |
+| **Check for Updates...** | Queries GitHub releases for a newer version and offers to download and install it |
+| **About Transcript Recorder** | Shows version info, supported applications, and a link to the GitHub repository |
+
 ## Supported Applications
 
 | Application | Status | Notes |

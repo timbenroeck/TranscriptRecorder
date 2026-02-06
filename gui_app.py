@@ -678,6 +678,7 @@ class TranscriptRecorderApp(QMainWindow):
         self._setup_menubar()
         self._setup_tray()
         self._load_config()
+        self._update_button_states()  # Set initial disabled state before permission check
         self._check_permissions()
         
         # Resize to fit content at minimum size
@@ -1194,6 +1195,17 @@ class TranscriptRecorderApp(QMainWindow):
                 background: {secondary_btn_hover};
                 color: {text_primary};
             }}
+            QTabBar::tab:disabled {{
+                background: transparent;
+                color: {disabled_text};
+                border: 1px solid {disabled_bg};
+            }}
+            QTabBar::tab:selected:disabled {{
+                background: {disabled_bg};
+                color: {disabled_text};
+                border: 1px solid {disabled_bg};
+                font-weight: 500;
+            }}
         """
         self.tab_widget.setStyleSheet(tab_style)
         
@@ -1313,6 +1325,10 @@ class TranscriptRecorderApp(QMainWindow):
         clear_snapshots_action = QAction("Clear All Snapshots", self)
         clear_snapshots_action.triggered.connect(self._clear_all_snapshots)
         maint_menu.addAction(clear_snapshots_action)
+        
+        clear_empty_action = QAction("Clear Empty Recordings", self)
+        clear_empty_action.triggered.connect(self._clear_empty_recordings)
+        maint_menu.addAction(clear_empty_action)
         
         maint_menu.addSeparator()
         
@@ -1480,7 +1496,7 @@ class TranscriptRecorderApp(QMainWindow):
         # Create recording directory with new structure:
         # /recordings/recording_{timestamp}_{app_name}/
         #   - meeting_transcript.txt (merged transcript)
-        #   - .snapshots/ (hidden folder for individual snapshots)
+        #   - .snapshots/ (created on-demand when first snapshot is taken)
         timestamp = datetime.now()
         folder_name = f"recording_{timestamp.strftime('%Y-%m-%d_%H%M')}_{self.selected_app_key}"
         self.current_recording_path = self.export_base_dir / "recordings" / folder_name
@@ -1489,7 +1505,6 @@ class TranscriptRecorderApp(QMainWindow):
         
         try:
             self.current_recording_path.mkdir(parents=True, exist_ok=True)
-            self.snapshots_path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             QMessageBox.critical(self, "Error", f"Failed to create recording folder:\n{e}")
             return
@@ -1532,10 +1547,6 @@ class TranscriptRecorderApp(QMainWindow):
         self.snapshot_count = 0
         self.transcript_text.clear()
         self.line_count_label.setText("Lines: 0")
-        self.copy_btn.setEnabled(False)
-        self.open_folder_btn.setEnabled(False)
-        self.save_details_btn.setEnabled(False)
-        self.open_folder_btn2.setEnabled(False)
         
         # Clear meeting details
         self.meeting_name_input.clear()
@@ -1707,20 +1718,30 @@ class TranscriptRecorderApp(QMainWindow):
     def _update_button_states(self):
         """Update button enabled states based on current state."""
         has_recorder = self.recorder_instance is not None
+        has_content = self.snapshot_count > 0
         
+        # Top-level controls (always accessible)
+        self.app_combo.setEnabled(not has_recorder)
         self.new_btn.setEnabled(not has_recorder)
         self.reset_btn.setEnabled(has_recorder and not self.is_recording)
-        self.auto_capture_btn.setEnabled(has_recorder)
-        # Capture Now is available whenever there's a recorder (even during auto-capture)
+        
+        # Recording controls — require an active session
         self.capture_btn.setEnabled(has_recorder)
-        self.app_combo.setEnabled(not has_recorder)
+        self.auto_capture_btn.setEnabled(has_recorder)
+        
+        # Tab widget — disabled entirely when no active session
+        self.tab_widget.setEnabled(has_recorder)
+        
+        # Transcript tab controls (explicit state within enabled tab)
+        self.copy_btn.setEnabled(has_content)
+        self.open_folder_btn.setEnabled(has_content)
+        
+        # Meeting Details tab controls
+        self.save_details_btn.setEnabled(has_recorder)
+        self.open_folder_btn2.setEnabled(has_recorder)
         
         # Update auto capture button text and style
         self._update_auto_capture_btn_style()
-        
-        # Meeting Details buttons
-        self.save_details_btn.setEnabled(has_recorder)
-        self.open_folder_btn2.setEnabled(has_recorder)
     
     def _update_auto_capture_btn_style(self):
         """Update the auto capture button text and color based on recording state."""
@@ -1965,6 +1986,69 @@ class TranscriptRecorderApp(QMainWindow):
             
             logger.info(f"Cleared {removed} snapshot folders ({errors} errors)")
             self.statusBar().showMessage(f"Cleared {removed} snapshot folders")
+    
+    def _clear_empty_recordings(self):
+        """Remove recording folders that contain no files (only empty subdirectories)."""
+        recordings_dir = self.export_base_dir / "recordings"
+        
+        if not recordings_dir.exists():
+            QMessageBox.information(self, "No Recordings", "No recordings folder found.")
+            return
+        
+        # Find recording folders that are effectively empty (no files anywhere inside)
+        empty_folders: List[Path] = []
+        for folder in sorted(recordings_dir.iterdir()):
+            if not folder.is_dir():
+                continue
+            # Skip the currently active recording folder
+            if self.current_recording_path and folder.resolve() == self.current_recording_path.resolve():
+                continue
+            # Check if the folder contains any files (recursively)
+            has_files = any(f.is_file() for f in folder.rglob("*"))
+            if not has_files:
+                empty_folders.append(folder)
+        
+        if not empty_folders:
+            QMessageBox.information(
+                self, "No Empty Recordings",
+                "No empty recording folders found."
+            )
+            return
+        
+        reply = QMessageBox.question(
+            self, "Clear Empty Recordings",
+            f"Found {len(empty_folders)} empty recording folder(s):\n\n"
+            + "\n".join(f"  • {f.name}" for f in empty_folders[:10])
+            + ("\n  ..." if len(empty_folders) > 10 else "")
+            + "\n\nThese folders contain no files. Remove them?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            removed = 0
+            errors = 0
+            for folder in empty_folders:
+                try:
+                    shutil.rmtree(folder)
+                    removed += 1
+                except Exception as e:
+                    logger.error(f"Failed to remove empty folder {folder}: {e}")
+                    errors += 1
+            
+            if errors > 0:
+                QMessageBox.warning(
+                    self, "Partial Success",
+                    f"Removed {removed} empty folder(s).\n{errors} folder(s) could not be removed."
+                )
+            else:
+                QMessageBox.information(
+                    self, "Success",
+                    f"Removed {removed} empty recording folder(s)."
+                )
+            
+            logger.info(f"Cleared {removed} empty recording folders ({errors} errors)")
+            self.statusBar().showMessage(f"Cleared {removed} empty recording folders")
     
     def _check_for_updates(self):
         """Check GitHub releases for a newer version."""

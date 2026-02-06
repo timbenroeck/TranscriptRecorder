@@ -41,13 +41,25 @@ if len(sys.argv) > 1 and sys.argv[1] == 'clean':
     print("Clean complete.")
     sys.exit(0)
 
+import os
 from setuptools import setup
 from version import __version__
 
+# Determine if this is a local source build or a release build.
+# Set SOURCE_BUILD=1 environment variable (used by build_local.sh) to produce
+# "Transcript Recorder SourceBuild.app" with a distinct bundle identifier so
+# macOS accessibility permissions don't collide with the installed release app.
+IS_SOURCE_BUILD = os.environ.get('SOURCE_BUILD', '0') == '1'
+
 # App information
-APP_NAME = 'Transcript Recorder'
+if IS_SOURCE_BUILD:
+    APP_NAME = 'Transcript Recorder SourceBuild'
+    APP_BUNDLE_ID = 'com.transcriptrecorder.sourcebuild'
+else:
+    APP_NAME = 'Transcript Recorder'
+    APP_BUNDLE_ID = 'com.transcriptrecorder.app'
+
 APP_VERSION = __version__
-APP_BUNDLE_ID = 'com.transcriptrecorder.app'
 
 # Main script
 APP_SCRIPT = 'gui_app.py'

@@ -55,6 +55,15 @@ echo "Python version: $(python --version)"
 echo "Python path: $(which python)"
 echo ""
 
+# --- Source build flag ---
+# This produces "Transcript Recorder SourceBuild.app" with a distinct bundle
+# identifier so macOS accessibility permissions don't collide with the
+# installed release version in /Applications.
+export SOURCE_BUILD=1
+APP_NAME="Transcript Recorder SourceBuild"
+echo "Building as: $APP_NAME (source build)"
+echo ""
+
 # --- Step 3: Install dependencies (mirrors GitHub Action) ---
 echo "=== Step 3: Installing dependencies ==="
 python -m pip install --upgrade pip
@@ -73,21 +82,24 @@ python setup_py2app.py py2app
 # --- Step 5: Verify build ---
 echo ""
 echo "=== Step 5: Verifying build ==="
-if [ -d "dist/Transcript Recorder.app" ]; then
-    echo "SUCCESS: dist/Transcript Recorder.app created"
+if [ -d "dist/$APP_NAME.app" ]; then
+    echo "SUCCESS: dist/$APP_NAME.app created"
     ls -la dist/
 else
     echo "ERROR: Application not found in dist/"
     exit 1
 fi
 
-# --- Step 6: Test launch (optional) ---
+# --- Step 6: Launch prompt ---
 echo ""
 echo "=== Build Complete ==="
 echo ""
-echo "To test the app from terminal:"
-echo "  \"dist/Transcript Recorder.app/Contents/MacOS/Transcript Recorder\""
-echo ""
-echo "To open the app normally:"
-echo "  open \"dist/Transcript Recorder.app\""
+read -p "Would you like to launch the app now? (y/n): " LAUNCH_CHOICE
+if [[ "$LAUNCH_CHOICE" =~ ^[Yy]$ ]]; then
+    echo "Launching $APP_NAME..."
+    open "dist/$APP_NAME.app"
+else
+    echo "Skipping launch. You can open it later with:"
+    echo "  open \"dist/$APP_NAME.app\""
+fi
 echo ""
