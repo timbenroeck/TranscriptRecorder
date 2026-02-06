@@ -597,6 +597,60 @@ class RecordingWorker(QThread):
         self._is_running = False
 
 
+class UpdateCheckWorker(QThread):
+    """Background worker to check for application updates without blocking the UI."""
+    
+    update_available = pyqtSignal(str, str, str, list)  # version, release_url, notes, assets
+    check_finished = pyqtSignal()  # emitted when check completes (no update or error)
+    
+    def run(self):
+        """Check GitHub releases for a newer version."""
+        try:
+            if GITHUB_OWNER == "YOUR_GITHUB_USERNAME":
+                logger.debug("Startup update check skipped: GITHUB_OWNER not configured")
+                self.check_finished.emit()
+                return
+            
+            url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+            logger.debug(f"Startup update check: querying {url}")
+            
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+                }
+            )
+            
+            with urllib.request.urlopen(request, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+            
+            latest_version = data.get("tag_name", "").lstrip("v")
+            release_url = data.get("html_url", "")
+            release_notes = data.get("body", "No release notes available.")
+            assets = data.get("assets", [])
+            
+            # Compare versions
+            current_parts = [int(x) for x in APP_VERSION.split(".")]
+            latest_parts = [int(x) for x in latest_version.split(".")]
+            
+            while len(current_parts) < len(latest_parts):
+                current_parts.append(0)
+            while len(latest_parts) < len(current_parts):
+                latest_parts.append(0)
+            
+            if latest_parts > current_parts:
+                logger.info(f"Startup update check: new version available ({latest_version}, current {APP_VERSION})")
+                self.update_available.emit(latest_version, release_url, release_notes, assets)
+            else:
+                logger.debug(f"Startup update check: already on latest version ({APP_VERSION})")
+                self.check_finished.emit()
+                
+        except Exception as e:
+            logger.debug(f"Startup update check failed silently: {e}")
+            self.check_finished.emit()
+
+
 class TranscriptRecorderApp(QMainWindow):
     """Main application window for Transcript Recorder."""
     
@@ -628,6 +682,11 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Resize to fit content at minimum size
         self.resize(self.minimumSizeHint())
+        
+        # Start non-blocking update check in the background
+        self._startup_update_worker = UpdateCheckWorker()
+        self._startup_update_worker.update_available.connect(self._on_startup_update_available)
+        self._startup_update_worker.start()
         
     def _setup_window(self):
         """Configure main window properties."""
@@ -1255,22 +1314,22 @@ class TranscriptRecorderApp(QMainWindow):
         clear_snapshots_action.triggered.connect(self._clear_all_snapshots)
         maint_menu.addAction(clear_snapshots_action)
         
-        # Help menu
-        help_menu = menubar.addMenu("Help")
-        
-        about_action = QAction(f"About {APP_NAME}", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
+        maint_menu.addSeparator()
         
         permissions_action = QAction("Check Permissions", self)
         permissions_action.triggered.connect(self._check_permissions)
-        help_menu.addAction(permissions_action)
-        
-        help_menu.addSeparator()
+        maint_menu.addAction(permissions_action)
         
         update_action = QAction("Check for Updates...", self)
         update_action.triggered.connect(self._check_for_updates)
-        help_menu.addAction(update_action)
+        maint_menu.addAction(update_action)
+        
+        maint_menu.addSeparator()
+        
+        about_action = QAction(f"About {APP_NAME}", self)
+        about_action.setMenuRole(QAction.MenuRole.AboutRole)
+        about_action.triggered.connect(self._show_about)
+        maint_menu.addAction(about_action)
         
     def _setup_tray(self):
         """Setup system tray icon (optional)."""
@@ -1381,6 +1440,17 @@ class TranscriptRecorderApp(QMainWindow):
         except Exception as e:
             logger.error(f"Permission check failed: {e}")
             
+    def _on_startup_update_available(self, version: str, release_url: str, notes: str, assets: list):
+        """Handle notification that a new version is available (from background check)."""
+        QMessageBox.information(
+            self,
+            "Update Available",
+            f"A new version of {APP_NAME} is available!\n\n"
+            f"Current version: {APP_VERSION}\n"
+            f"Latest version: {version}\n\n"
+            f"You can download it from the Maintenance menu → Check for Updates."
+        )
+    
     def _on_app_changed(self, index: int):
         """Handle application selection change."""
         if index < 0:
@@ -1769,7 +1839,8 @@ class TranscriptRecorderApp(QMainWindow):
         self.statusBar().showMessage(text)
         
     def _show_about(self):
-        """Show about dialog."""
+        """Show about dialog with GitHub repository link."""
+        github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
         QMessageBox.about(
             self,
             f"About {APP_NAME}",
@@ -1784,6 +1855,7 @@ class TranscriptRecorderApp(QMainWindow):
             f"<li>WebEx</li>"
             f"<li>Slack</li>"
             f"</ul>"
+            f'<p>GitHub: <a href="{github_url}">{github_url}</a></p>'
         )
     
     def _show_log_viewer(self):

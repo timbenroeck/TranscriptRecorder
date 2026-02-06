@@ -60,36 +60,6 @@ Transcript Recorder uses the macOS Accessibility API to read transcript content 
 
 > **Note:** If Transcript Recorder does not appear in the Accessibility list, click the **+** button, navigate to your Applications folder, and add it manually. You may need to restart the app after granting permissions.
 
-### From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/tr_v3.git
-cd tr_v3
-
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the application
-python gui_app.py
-```
-
-### Building the App Bundle
-
-```bash
-# Install py2app
-pip install py2app
-
-# Build the application
-python setup_py2app.py py2app
-
-# The app will be in dist/Transcript Recorder.app
-```
-
 ## Usage
 
 ### Quick Start
@@ -191,28 +161,6 @@ To add support for a new meeting application:
 | **WebEx** | ✅ Supported | Works with Captions window |
 | **Slack** | ✅ Supported | Works with Huddle transcripts |
 
-## Menu Options
-
-### File Menu
-- **New Recording** (`Cmd+N`): Start a new recording session
-- **Reset** (`Cmd+R`): Reset the current session
-- **Open Export Folder** (`Cmd+O`): Open the recordings folder
-
-### View Menu
-- **Appearance**: Switch between Light, Dark, or System theme
-- **Log File** (`Cmd+L`): View application logs
-- **Edit Configuration** (`Cmd+Shift+,`): Edit the config file
-
-### Maintenance Menu
-- **Reload Configuration**: Reload config without restarting
-- **Clear Log File**: Clear the log file
-- **Clear All Snapshots**: Remove snapshot folders from all recordings
-
-### Help Menu
-- **About**: Version and app information
-- **Check Permissions**: Verify accessibility permissions
-- **Check for Updates**: Check for new versions on GitHub
-
 ## Troubleshooting
 
 ### "Accessibility permission required"
@@ -237,49 +185,6 @@ See [Granting Accessibility Permissions](#granting-accessibility-permissions) ab
 - Check that the `command_paths` in config.json match your installation
 - Some apps (like Teams) may run from different paths depending on how they were installed
 
-## Development
-
-### Project Structure
-
-```
-tr_v3/
-├── gui_app.py              # Main GUI application
-├── transcript_recorder.py  # Core recording logic
-├── transcript_utils.py     # Transcript merging utilities
-├── version.py              # Version information
-├── config.json             # Default configuration
-├── setup_py2app.py         # py2app build script
-├── bump_version.py         # Version management script
-├── requirements.txt        # Python dependencies
-└── .github/
-    └── workflows/
-        └── build-release.yml  # GitHub Actions workflow
-```
-
-### Running Tests
-
-```bash
-# Run the TUI version (for debugging)
-python tui_app.py
-
-# Run the GUI version
-python gui_app.py
-```
-
-### Creating a Release
-
-See [RELEASE.md](RELEASE.md) for detailed release instructions.
-
-```bash
-# Bump version
-python bump_version.py patch
-
-# Commit and tag
-git add version.py
-git commit -m "Bump version to X.Y.Z"
-git tag vX.Y.Z
-git push origin main --tags
-```
 
 ## License
 
