@@ -7,24 +7,25 @@ set -e  # Exit on error
 echo "=== Transcript Recorder Local Build ==="
 echo ""
 
-# Get the directory where the script is located
+# Get the project root directory (parent of the scripts/ folder)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+cd "$PROJECT_ROOT"
 
-echo "Working directory: $SCRIPT_DIR"
+echo "Working directory: $PROJECT_ROOT"
 echo ""
 
 # --- Check for virtual environment ---
-if [ ! -d "$SCRIPT_DIR/.venv" ]; then
-    echo "ERROR: No .venv found in $SCRIPT_DIR"
+if [ ! -d "$PROJECT_ROOT/.venv" ]; then
+    echo "ERROR: No .venv found in $PROJECT_ROOT"
     echo ""
     echo "Please run full_rebuild_local.sh first to create the virtual environment:"
-    echo "  ./full_rebuild_local.sh"
+    echo "  scripts/full_rebuild_local.sh"
     exit 1
 fi
 
 echo "Activating virtual environment..."
-source "$SCRIPT_DIR/.venv/bin/activate"
+source "$PROJECT_ROOT/.venv/bin/activate"
 echo "Python version: $(python --version)"
 echo "Python path: $(which python)"
 echo ""
@@ -57,16 +58,23 @@ else
     exit 1
 fi
 
-# --- Step 4: Launch prompt ---
+# --- Step 4: Launch prompt (Looping) ---
 echo ""
 echo "=== Build Complete ==="
-echo ""
-read -p "Would you like to launch the app now? (y/n): " LAUNCH_CHOICE
-if [[ "$LAUNCH_CHOICE" =~ ^[Yy]$ ]]; then
-    echo "Launching $APP_NAME..."
-    open "dist/$APP_NAME.app"
-else
-    echo "Skipping launch. You can open it later with:"
-    echo "  open \"dist/$APP_NAME.app\""
-fi
+
+while true; do
+    echo ""
+    read -p "Would you like to launch the app now? (y/n): " LAUNCH_CHOICE
+    
+    if [[ "$LAUNCH_CHOICE" =~ ^[Yy]$ ]]; then
+        echo "Launching $APP_NAME..."
+        open "dist/$APP_NAME.app"
+        echo "App opened. Loop continuing..."
+    else
+        echo "Exiting. You can open it later with:"
+        echo "  open \"dist/$APP_NAME.app\""
+        break  # This exits the loop
+    fi
+done
+
 echo ""

@@ -152,6 +152,128 @@ To add support for a new meeting application:
 4. Define rules to locate the transcript element
 5. Save and reload configuration
 
+## Meeting Tools
+
+The **Meeting Tools** tab lets you run custom scripts against your recordings directly from the app. Tools are discovered automatically from the `tools/` directory inside your export folder (by default `~/Documents/transcriptrecorder/tools/`).
+
+### Folder Structure
+
+Each tool lives in its own sub-folder containing a JSON definition, a script, and an optional README:
+
+```
+tools/
+└── summarize_meeting/
+    ├── tool.json               # Tool metadata and parameter definitions
+    ├── summarize_meeting.sh    # The script that gets executed
+    └── README.md               # Optional documentation
+```
+
+On startup (and on configuration reload), the app scans each sub-folder of `tools/` for a `.json` file, verifies the referenced script exists, and populates the tool dropdown. To add a new tool, create a new sub-folder with a JSON + script pair — no app changes needed.
+
+### JSON Definition Format
+
+```json
+{
+  "display_name": "Summarize Meeting",
+  "description": "Generate an AI-powered meeting summary.",
+  "script": "summarize_meeting.sh",
+  "parameters": [
+    {
+      "flag": "-m",
+      "label": "Meeting Directory",
+      "builtin": "meeting_directory",
+      "required": true
+    },
+    {
+      "flag": "-o",
+      "label": "Output Directory",
+      "default": "/path/to/output",
+      "required": false
+    }
+  ]
+}
+```
+
+#### Top-Level Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `display_name` | Yes | Name shown in the tool dropdown |
+| `description` | No | Shown below the dropdown when the tool is selected |
+| `script` | Yes | Filename of the script in the same sub-folder |
+| `parameters` | No | Array of parameter definitions (see below) |
+
+#### Parameter Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `flag` | Yes | Command-line flag passed to the script (e.g. `-m`, `--output`) |
+| `label` | No | Human-readable name shown in the Parameters table |
+| `builtin` | No | Auto-filled from the app's current state (see table below) |
+| `default` | No | Default value used when `builtin` is not set |
+| `required` | No | If `true`, the tool will refuse to run when the value is missing |
+
+Parameters appear in an **editable table** in the app. Values pre-filled from `builtin` mappings or `default` values can be modified before clicking Run.
+
+### Built-in Parameter Values
+
+Parameters with a `"builtin"` key are automatically resolved at run-time:
+
+| `builtin` value | Resolves to |
+|-----------------|-------------|
+| `meeting_directory` | Full path to the current recording folder |
+| `meeting_transcript` | Full path to `meeting_transcript.txt` |
+| `meeting_details` | Full path to `meeting_details.txt` |
+| `export_directory` | Base export directory (`~/Documents/transcriptrecorder`) |
+| `app_name` | Key of the selected application (e.g. `zoom`, `teams`) |
+
+### Script Execution
+
+- `.sh` / `.bash` scripts are run with `/bin/bash`
+- `.py` scripts are run with the app's Python interpreter
+- `.zsh` scripts are run with `/bin/zsh`
+- Other extensions are executed directly (the script must have its execute bit set)
+
+Scripts run in a background thread with a 5-minute timeout. The working directory is set to the tool's own sub-folder. Output (stdout and stderr) is displayed in the tool output area when the script finishes.
+
+### Example: Adding a New Tool
+
+1. Create a sub-folder in `~/Documents/transcriptrecorder/tools/`:
+
+   ```
+   mkdir ~/Documents/transcriptrecorder/tools/my_tool
+   ```
+
+2. Add your script (`my_tool.sh`):
+
+   ```bash
+   #!/bin/bash
+   # my_tool.sh — does something useful with a recording
+   echo "Processing meeting in: $2"
+   ```
+
+3. Add a JSON definition (`tool.json`):
+
+   ```json
+   {
+     "display_name": "My Custom Tool",
+     "description": "Does something useful with meeting recordings.",
+     "script": "my_tool.sh",
+     "parameters": [
+       {
+         "flag": "-m",
+         "label": "Meeting Directory",
+         "builtin": "meeting_directory",
+         "required": true
+       }
+     ]
+   }
+   ```
+
+4. Optionally add a `README.md` documenting the tool's purpose and requirements.
+
+5. Reload the configuration (Maintenance → Reload Configuration) or restart the app. The tool will appear in the Meeting Tools dropdown.
+
 ## Menu Reference
 
 ### File

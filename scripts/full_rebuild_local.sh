@@ -7,11 +7,12 @@ set -e  # Exit on error
 echo "=== Transcript Recorder Local Build ==="
 echo ""
 
-# Get the directory where the script is located
+# Get the project root directory (parent of the scripts/ folder)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+cd "$PROJECT_ROOT"
 
-echo "Working directory: $SCRIPT_DIR"
+echo "Working directory: $PROJECT_ROOT"
 echo ""
 
 # --- Step 1: Clean everything ---
