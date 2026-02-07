@@ -1,0 +1,37 @@
+{
+  "display_name": "Summarize Meeting",
+  "description": "Generate an AI-powered meeting summary using Cortex. Requires meeting_details.txt and meeting_transcript.txt in the recording directory.",
+  "script": "summarize_meeting.sh",
+  "parameters": [
+    {
+      "flag": "-m",
+      "label": "Meeting Directory",
+      "builtin": "meeting_directory",
+      "required": true
+    },
+    {
+      "flag": "-o",
+      "label": "Output Directory",
+      "default": "~/Documents/obsidian_vault/Meetings",
+      "required": true
+    },
+    {
+      "flag": "-f",
+      "label": "First Name",
+      "default": "John",
+      "required": false
+    },
+    {
+      "flag": "-l",
+      "label": "Last Name",
+      "default": "Smith",
+      "required": false
+    },
+    {
+      "flag": "-c",
+      "label": "Cortex Connection",
+      "default": "snowflake",
+      "required": false
+    }
+  ]
+}
