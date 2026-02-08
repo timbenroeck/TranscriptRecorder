@@ -1,0 +1,517 @@
+"""
+Reusable editor widgets for structured JSON data files that tools declare
+in their tool.json via the "data_files" array.
+"""
+import json
+from pathlib import Path
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QMessageBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+)
+
+from gui.constants import logger
+
+
+class BaseDataEditor(QWidget):
+    """Abstract base for structured data editors."""
+    modified = pyqtSignal()
+
+    def __init__(self, file_path: Path, parent=None):
+        super().__init__(parent)
+        self._file_path = file_path
+        self._is_modified = False
+
+    def load(self):
+        raise NotImplementedError
+
+    def save(self) -> bool:
+        raise NotImplementedError
+
+    def is_modified(self) -> bool:
+        return self._is_modified
+
+
+class KeyArrayGridEditor(BaseDataEditor):
+    """Editor for ``{ "Key": ["val1", "val2", ...] }`` JSON files.
+
+    Renders a two-column datagrid where the first column is the key (correct
+    term) and the second column shows the array values as a comma-separated
+    string.  Both columns are editable inline.
+    """
+
+    def __init__(self, file_path: Path, key_label: str = "Key",
+                 values_label: str = "Values (comma-separated)", parent=None):
+        super().__init__(file_path, parent)
+        self._key_label = key_label
+        self._values_label = values_label
+        self._loading = False  # guard against cellChanged during load
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Table
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels([self._key_label, self._values_label])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.table)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add Row")
+        add_btn.clicked.connect(self._add_row)
+        btn_layout.addWidget(add_btn)
+
+        delete_btn = QPushButton("- Delete Row")
+        delete_btn.clicked.connect(self._delete_row)
+        btn_layout.addWidget(delete_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.load()
+
+    def load(self):
+        self._loading = True
+        self.table.setRowCount(0)
+        try:
+            if self._file_path.exists():
+                with open(self._file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for key in sorted(data.keys()):
+                    values = data[key]
+                    row = self.table.rowCount()
+                    self.table.insertRow(row)
+                    self.table.setItem(row, 0, QTableWidgetItem(key))
+                    vals_str = ", ".join(str(v) for v in values) if isinstance(values, list) else str(values)
+                    self.table.setItem(row, 1, QTableWidgetItem(vals_str))
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to load {self._file_path}: {e}")
+        self._is_modified = False
+        self._loading = False
+
+    def save(self) -> bool:
+        data = {}
+        for row in range(self.table.rowCount()):
+            key_item = self.table.item(row, 0)
+            vals_item = self.table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            vals_str = vals_item.text().strip() if vals_item else ""
+            if not key:
+                continue
+            values = [v.strip() for v in vals_str.split(",") if v.strip()]
+            data[key] = values
+        try:
+            with open(self._file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+            self._is_modified = False
+            return True
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to save {self._file_path}: {e}")
+            return False
+
+    def _on_cell_changed(self, row: int, col: int):
+        if not self._loading:
+            self._is_modified = True
+            self.modified.emit()
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.setItem(row, 1, QTableWidgetItem(""))
+        self.table.editItem(self.table.item(row, 0))
+        self._is_modified = True
+        self.modified.emit()
+
+    def _delete_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        key_item = self.table.item(row, 0)
+        key_text = key_item.text() if key_item else "(empty)"
+        reply = QMessageBox.question(
+            self, "Delete Row",
+            f"Delete row \"{key_text}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table.removeRow(row)
+            self._is_modified = True
+            self.modified.emit()
+
+
+class KeyValueGridEditor(BaseDataEditor):
+    """Editor for ``{ "key": "value" }`` JSON files.
+
+    Renders a two-column datagrid with Key and Value, both editable inline.
+    """
+
+    def __init__(self, file_path: Path, key_label: str = "Key",
+                 value_label: str = "Value", parent=None):
+        super().__init__(file_path, parent)
+        self._key_label = key_label
+        self._value_label = value_label
+        self._loading = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels([self._key_label, self._value_label])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.table)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add Row")
+        add_btn.clicked.connect(self._add_row)
+        btn_layout.addWidget(add_btn)
+
+        delete_btn = QPushButton("- Delete Row")
+        delete_btn.clicked.connect(self._delete_row)
+        btn_layout.addWidget(delete_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.load()
+
+    def load(self):
+        self._loading = True
+        self.table.setRowCount(0)
+        try:
+            if self._file_path.exists():
+                with open(self._file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for key in sorted(data.keys()):
+                    row = self.table.rowCount()
+                    self.table.insertRow(row)
+                    self.table.setItem(row, 0, QTableWidgetItem(str(key)))
+                    self.table.setItem(row, 1, QTableWidgetItem(str(data[key])))
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to load {self._file_path}: {e}")
+        self._is_modified = False
+        self._loading = False
+
+    def save(self) -> bool:
+        data = {}
+        for row in range(self.table.rowCount()):
+            key_item = self.table.item(row, 0)
+            val_item = self.table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            val = val_item.text().strip() if val_item else ""
+            if not key:
+                continue
+            data[key] = val
+        try:
+            with open(self._file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+            self._is_modified = False
+            return True
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to save {self._file_path}: {e}")
+            return False
+
+    def _on_cell_changed(self, row: int, col: int):
+        if not self._loading:
+            self._is_modified = True
+            self.modified.emit()
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.setItem(row, 1, QTableWidgetItem(""))
+        self.table.editItem(self.table.item(row, 0))
+        self._is_modified = True
+        self.modified.emit()
+
+    def _delete_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        key_item = self.table.item(row, 0)
+        key_text = key_item.text() if key_item else "(empty)"
+        reply = QMessageBox.question(
+            self, "Delete Row",
+            f"Delete row \"{key_text}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table.removeRow(row)
+            self._is_modified = True
+            self.modified.emit()
+
+
+class StringListEditor(BaseDataEditor):
+    """Editor for ``["item1", "item2", ...]`` JSON arrays.
+
+    Renders a single-column list with Add / Delete / Move-up / Move-down
+    controls.
+    """
+
+    def __init__(self, file_path: Path, item_label: str = "Value", parent=None):
+        super().__init__(file_path, parent)
+        self._item_label = item_label
+        self._loading = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = QTableWidget(0, 1)
+        self.table.setHorizontalHeaderLabels([self._item_label])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.table)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add")
+        add_btn.clicked.connect(self._add_row)
+        btn_layout.addWidget(add_btn)
+
+        delete_btn = QPushButton("- Delete")
+        delete_btn.clicked.connect(self._delete_row)
+        btn_layout.addWidget(delete_btn)
+
+        up_btn = QPushButton("Move Up")
+        up_btn.clicked.connect(self._move_up)
+        btn_layout.addWidget(up_btn)
+
+        down_btn = QPushButton("Move Down")
+        down_btn.clicked.connect(self._move_down)
+        btn_layout.addWidget(down_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.load()
+
+    def load(self):
+        self._loading = True
+        self.table.setRowCount(0)
+        try:
+            if self._file_path.exists():
+                with open(self._file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    for item in data:
+                        row = self.table.rowCount()
+                        self.table.insertRow(row)
+                        self.table.setItem(row, 0, QTableWidgetItem(str(item)))
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to load {self._file_path}: {e}")
+        self._is_modified = False
+        self._loading = False
+
+    def save(self) -> bool:
+        data = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            val = item.text().strip() if item else ""
+            if val:
+                data.append(val)
+        try:
+            with open(self._file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+            self._is_modified = False
+            return True
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to save {self._file_path}: {e}")
+            return False
+
+    def _on_cell_changed(self, row: int, col: int):
+        if not self._loading:
+            self._is_modified = True
+            self.modified.emit()
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.editItem(self.table.item(row, 0))
+        self._is_modified = True
+        self.modified.emit()
+
+    def _delete_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        item = self.table.item(row, 0)
+        text = item.text() if item else "(empty)"
+        reply = QMessageBox.question(
+            self, "Delete Item",
+            f"Delete \"{text}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table.removeRow(row)
+            self._is_modified = True
+            self.modified.emit()
+
+    def _move_up(self):
+        row = self.table.currentRow()
+        if row <= 0:
+            return
+        self._swap_rows(row, row - 1)
+        self.table.setCurrentCell(row - 1, 0)
+
+    def _move_down(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= self.table.rowCount() - 1:
+            return
+        self._swap_rows(row, row + 1)
+        self.table.setCurrentCell(row + 1, 0)
+
+    def _swap_rows(self, a: int, b: int):
+        self._loading = True
+        item_a = self.table.item(a, 0)
+        item_b = self.table.item(b, 0)
+        text_a = item_a.text() if item_a else ""
+        text_b = item_b.text() if item_b else ""
+        self.table.item(a, 0).setText(text_b)
+        self.table.item(b, 0).setText(text_a)
+        self._loading = False
+        self._is_modified = True
+        self.modified.emit()
+
+
+# Map of editor type name -> editor class
+DATA_FILE_EDITORS = {
+    "key_array_grid": KeyArrayGridEditor,
+    "key_value_grid": KeyValueGridEditor,
+    "string_list": StringListEditor,
+}
+
+
+class DataFileEditorDialog(QMainWindow):
+    """A window for editing a tool's data file using a structured editor.
+
+    Picks the appropriate editor widget based on the ``editor`` type declared
+    in the tool's ``data_files`` entry.
+    """
+
+    data_saved = pyqtSignal()  # Emitted after a successful save
+
+    def __init__(self, file_path: Path, editor_type: str, label: str,
+                 tool_name: str = "", parent=None):
+        super().__init__(parent)
+        self._file_path = file_path
+        self.setWindowTitle(f"{label} — {tool_name}" if tool_name else label)
+        self.setMinimumSize(600, 400)
+        self.resize(700, 500)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # Info label
+        info = QLabel(f"Editing: {file_path}")
+        info.setObjectName("secondary_label")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Create the editor widget
+        editor_cls = DATA_FILE_EDITORS.get(editor_type)
+        if editor_cls:
+            self.editor = editor_cls(file_path)
+        else:
+            logger.warning(f"DataFileEditor: unknown editor type '{editor_type}', "
+                           f"falling back to key_value_grid")
+            self.editor = KeyValueGridEditor(file_path)
+        self.editor.modified.connect(self._on_modified)
+        layout.addWidget(self.editor, stretch=1)
+
+        # Status
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        reload_btn = QPushButton("Reload")
+        reload_btn.clicked.connect(self._reload)
+        btn_layout.addWidget(reload_btn)
+
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        save_btn.setProperty("class", "success")
+        save_btn.clicked.connect(self._save)
+        btn_layout.addWidget(save_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _on_modified(self):
+        self.status_label.setText("")
+
+    def _reload(self):
+        if self.editor.is_modified():
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved changes. Reload and discard them?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+        self.editor.load()
+        self.status_label.setText("Reloaded from disk.")
+        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+
+    def _save(self):
+        if self.editor.save():
+            self.status_label.setText("✓ Saved")
+            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            logger.info(f"DataFileEditor: saved {self._file_path}")
+            self.data_saved.emit()
+        else:
+            self.status_label.setText("✗ Save failed — check the log for details")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+
+    def closeEvent(self, event):
+        if self.editor.is_modified():
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved changes. Close without saving?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+        event.accept()

@@ -1,0 +1,2707 @@
+"""
+Main application window for Transcript Recorder.
+"""
+import asyncio
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+import urllib.error
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtGui import QAction, QActionGroup, QFont, QIcon, QPalette, QColor
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QComboBox, QPushButton, QTextEdit, QProgressBar,
+    QMessageBox, QFileDialog, QStatusBar, QGroupBox, QSpinBox,
+    QSplitter, QFrame, QSizePolicy, QSystemTrayIcon, QMenu,
+    QTabWidget, QLineEdit, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QCheckBox, QInputDialog, QDialog,
+)
+
+from transcript_recorder import TranscriptRecorder, AXIsProcessTrusted
+from transcript_utils import smart_merge
+from version import __version__, GITHUB_OWNER, GITHUB_REPO
+
+from gui.constants import (
+    APP_NAME, APP_VERSION, APP_SUPPORT_DIR, CONFIG_PATH, LOG_DIR,
+    DEFAULT_EXPORT_DIR, OLD_CONFIG_DIR, logger, current_log_file_path,
+    setup_logging, resource_path, _HAS_APPKIT,
+)
+from gui.styles import get_application_stylesheet
+from gui.icons import IconManager
+from gui.workers import (
+    RecordingWorker, ToolRunnerWorker, StreamingToolRunnerWorker,
+    UpdateCheckWorker, ToolFetchWorker,
+    STREAM_PARSERS, _stream_parser_raw,
+)
+from gui.dialogs import LogViewerDialog, SetupDialog, ConfigEditorDialog
+from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
+from gui.data_editors import DataFileEditorDialog
+
+
+class TranscriptRecorderApp(QMainWindow):
+    """Main application window for Transcript Recorder."""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # State
+        self.config: Optional[Dict[str, Any]] = None
+        self.selected_app_key: Optional[str] = None
+        self.recorder_instance: Optional[TranscriptRecorder] = None
+        self.recording_worker: Optional[RecordingWorker] = None
+        self.current_recording_path: Optional[Path] = None
+        self.snapshots_path: Optional[Path] = None  # Hidden .snapshots folder
+        self.merged_transcript_path: Optional[Path] = None  # meeting_transcript.txt
+        self.export_base_dir: Path = DEFAULT_EXPORT_DIR
+        self.is_recording = False
+        self.snapshot_count = 0
+        self._is_capturing = False  # True while a capture+merge is in progress
+        self.capture_interval = 30  # Default capture interval in seconds
+        self.theme_mode = "system"  # "light", "dark", or "system"
+        self.meeting_details_dirty = False  # Track if meeting details need saving
+        self._discovered_tools: Dict[str, dict] = {}  # tool_key -> parsed JSON definition
+        self._tool_scripts_dir: Optional[Path] = None
+        self._tool_runner: Optional[ToolRunnerWorker] = None
+        self._data_file_editors: List[DataFileEditorDialog] = []  # keep refs alive
+        self._tool_start_time: float = 0.0  # time.time() when tool started
+        self._tool_elapsed_timer: Optional[QTimer] = None  # ticks every second while tool runs
+        self._idle_warning_seconds: int = 30   # overwritten per-tool from tool.json
+        self._idle_kill_seconds: int = 120     # overwritten per-tool from tool.json
+        self._compact_mode = False  # Track compact/expanded view state
+        self._expanded_size = None  # Remember window size before compacting
+        self._has_accessibility = True  # Assume granted; _check_permissions will update
+        
+        # Setup UI
+        self._setup_window()
+        self._setup_ui()
+        self._setup_menubar()
+        self._setup_tray()
+        self._load_config()
+        self._update_button_states()  # Set initial disabled state before permission check
+        self._check_permissions()
+        
+        # Default window size (4:3 aspect ratio)
+        self.resize(600, 450)
+        
+        # Start non-blocking update check in the background
+        self._startup_update_worker = UpdateCheckWorker()
+        self._startup_update_worker.update_available.connect(self._on_startup_update_available)
+        self._startup_update_worker.start()
+        
+        # Default to "hidden from screen sharing" -- deferred because the
+        # native NSWindow doesn't exist until after show() is called.
+        if _HAS_APPKIT:
+            QTimer.singleShot(100, lambda: self._toggle_privacy_mode(True))
+        
+    def _setup_window(self):
+        """Configure main window properties."""
+        self.setWindowTitle(APP_NAME)
+        self.setMinimumSize(450, 300)
+        # Will be adjusted to fit content after UI is built
+        
+        # Try to load app icon
+        icon_path = resource_path("transcriber.icns")
+        if icon_path.exists():
+            # On macOS, the app bundle's CFBundleIconFile provides the Dock
+            # icon natively.  Calling setWindowIcon() overrides the native
+            # rendering and strips the system-provided background that macOS
+            # adds behind transparent icons, making the icon hard to see.
+            # Only set the window icon on non-macOS platforms.
+            if sys.platform != "darwin":
+                self.setWindowIcon(QIcon(str(icon_path)))
+        
+        # macOS specific settings
+        if sys.platform == "darwin":
+            self.setUnifiedTitleAndToolBarOnMac(True)
+    
+    def _setup_ui(self):
+        """Build the user interface."""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(12, 8, 12, 4)
+        main_layout.setSpacing(6)
+        
+        # === Application Selection Section ===
+        app_group = QWidget()
+        app_layout = QHBoxLayout(app_group)
+        app_layout.setContentsMargins(0, 0, 0, 0)
+        app_layout.setSpacing(8)
+        
+        self.app_combo = QComboBox()
+        self.app_combo.setMinimumWidth(180)
+        self.app_combo.currentIndexChanged.connect(self._on_app_changed)
+        app_layout.addWidget(self.app_combo, stretch=1)
+        
+        self.new_btn = QPushButton("New Recording")
+        self.new_btn.setProperty("class", "primary")
+        self.new_btn.setToolTip("Start a new recording session")
+        self.new_btn.clicked.connect(self._on_new_recording)
+        app_layout.addWidget(self.new_btn)
+        
+        self.reset_btn = QPushButton("Reset")
+        self.reset_btn.setProperty("class", "pink")
+        self.reset_btn.setEnabled(False)
+        self.reset_btn.setToolTip("Reset the current recording session")
+        self.reset_btn.clicked.connect(self._on_reset_recording)
+        app_layout.addWidget(self.reset_btn)
+        
+        self.load_previous_btn = QPushButton("Load Previous Meeting")
+        self.load_previous_btn.setToolTip("Load meeting details and transcript from a previous recording folder")
+        self.load_previous_btn.clicked.connect(self._on_load_previous_meeting)
+        app_layout.addWidget(self.load_previous_btn)
+        
+        main_layout.addWidget(app_group)
+        
+        # === Recording Controls Section ===
+        controls_group = QWidget()
+        controls_layout = QHBoxLayout(controls_group)
+        controls_layout.setContentsMargins(0, 4, 0, 4)
+        controls_layout.setSpacing(8)
+        
+        self.capture_btn = QPushButton("Capture Now")
+        self.capture_btn.setProperty("class", "primary")
+        self.capture_btn.setEnabled(False)
+        self.capture_btn.setToolTip("Take a single transcript snapshot")
+        self.capture_btn.clicked.connect(self._on_capture_now)
+        controls_layout.addWidget(self.capture_btn)
+        
+        self.auto_capture_btn = QPushButton("Start Auto Capture")
+        self.auto_capture_btn.setProperty("class", "success")
+        self.auto_capture_btn.setEnabled(False)
+        self.auto_capture_btn.setToolTip("Toggle continuous transcript capture")
+        self.auto_capture_btn.clicked.connect(self._on_toggle_auto_capture)
+        controls_layout.addWidget(self.auto_capture_btn)
+        
+        main_layout.addWidget(controls_group)
+        
+        # === Separator between controls and tab section ===
+        self.separator_top = QFrame()
+        self.separator_top.setFrameShape(QFrame.Shape.HLine)
+        self.separator_top.setFrameShadow(QFrame.Shadow.Plain)
+        self.separator_top.setFixedHeight(1)
+        main_layout.addWidget(self.separator_top)
+        
+        # === Tabbed Section (Meeting Details & Transcript) ===
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setDocumentMode(False)
+        self.tab_widget.tabBar().setExpanding(False)  # Left-align tabs
+        self.tab_widget.tabBar().setDrawBase(False)  # Remove the line under tabs
+        self.tab_widget.tabBar().setAutoFillBackground(False)
+        self.tab_widget.setAutoFillBackground(False)
+        
+        # --- Meeting Details Tab (first/default) ---
+        details_tab = QWidget()
+        details_tab.setAutoFillBackground(False)
+        details_layout = QVBoxLayout(details_tab)
+        details_layout.setContentsMargins(0, 8, 0, 0)
+        details_layout.setSpacing(8)
+        
+        # Meeting Date/Time
+        datetime_layout = QHBoxLayout()
+        datetime_layout.setSpacing(4)
+        datetime_label = QLabel("Date/Time:")
+        datetime_label.setFixedWidth(110)
+        datetime_layout.addWidget(datetime_label)
+        
+        self.meeting_datetime_input = QLineEdit()
+        self.meeting_datetime_input.textChanged.connect(self._on_meeting_details_changed)
+        datetime_layout.addWidget(self.meeting_datetime_input, stretch=1)
+        
+        # Round time buttons -- side by side next to the text field
+        is_dark = self._is_dark_mode()
+        
+        self.time_down_btn = QPushButton()
+        self.time_down_btn.setObjectName("time_btn")
+        self.time_down_btn.setIcon(IconManager.get_icon("arrow_down", is_dark=is_dark, size=20))
+        self.time_down_btn.setFixedSize(28, 28)
+        self.time_down_btn.setIconSize(QSize(20, 20))
+        self.time_down_btn.setToolTip("Round time down by 5 minutes")
+        self.time_down_btn.clicked.connect(self._on_round_time_down)
+        datetime_layout.addWidget(self.time_down_btn)
+        
+        self.time_up_btn = QPushButton()
+        self.time_up_btn.setObjectName("time_btn")
+        self.time_up_btn.setIcon(IconManager.get_icon("arrow_up", is_dark=is_dark, size=20))
+        self.time_up_btn.setFixedSize(28, 28)
+        self.time_up_btn.setIconSize(QSize(20, 20))
+        self.time_up_btn.setToolTip("Round time up by 5 minutes")
+        self.time_up_btn.clicked.connect(self._on_round_time_up)
+        datetime_layout.addWidget(self.time_up_btn)
+        
+        details_layout.addLayout(datetime_layout)
+        
+        # Meeting Name
+        name_layout = QHBoxLayout()
+        name_layout.setSpacing(4)
+        name_label = QLabel("Meeting Name:")
+        name_label.setFixedWidth(110)
+        name_layout.addWidget(name_label)
+        
+        self.meeting_name_input = QLineEdit()
+        self.meeting_name_input.setPlaceholderText("Enter meeting name...")
+        self.meeting_name_input.textChanged.connect(self._on_meeting_details_changed)
+        name_layout.addWidget(self.meeting_name_input)
+        
+        details_layout.addLayout(name_layout)
+        
+        # Meeting Notes
+        notes_label = QLabel("Meeting Notes:")
+        details_layout.addWidget(notes_label)
+        
+        self.meeting_notes_input = QTextEdit()
+        self.meeting_notes_input.setPlaceholderText("Enter meeting notes, attendees, action items, etc...")
+        self.meeting_notes_input.setFont(QFont("SF Pro", 12))
+        self.meeting_notes_input.textChanged.connect(self._on_meeting_details_changed)
+        details_layout.addWidget(self.meeting_notes_input)
+        
+        # Meeting Details actions
+        details_actions_layout = QHBoxLayout()
+        details_actions_layout.setSpacing(8)
+        
+        self.save_details_btn = QPushButton("Save Details")
+        self.save_details_btn.setProperty("class", "primary")
+        self.save_details_btn.setEnabled(False)
+        self.save_details_btn.clicked.connect(self._on_save_details_clicked)
+        details_actions_layout.addWidget(self.save_details_btn)
+        
+        self.open_folder_btn2 = QPushButton("Open Recording Folder")
+        self.open_folder_btn2.setEnabled(False)
+        self.open_folder_btn2.clicked.connect(self._on_open_folder)
+        details_actions_layout.addWidget(self.open_folder_btn2)
+        
+        details_actions_layout.addStretch()
+        
+        details_layout.addLayout(details_actions_layout)
+        
+        self.tab_widget.addTab(details_tab, "Meeting Details")
+        
+        # --- Meeting Transcript Tab ---
+        transcript_tab = QWidget()
+        transcript_tab.setAutoFillBackground(False)
+        transcript_layout = QVBoxLayout(transcript_tab)
+        transcript_layout.setContentsMargins(0, 8, 0, 0)
+        
+        self.transcript_text = QTextEdit()
+        self.transcript_text.setReadOnly(True)
+        self.transcript_text.setPlaceholderText(
+            "Transcript will appear here after recording starts...\n\n"
+            "To begin:\n"
+            "1. Select your meeting application above\n"
+            "2. Make sure your meeting has captions/transcript enabled\n"
+            "3. Click 'New Recording' then 'Capture Now' or 'Start Auto Capture'"
+        )
+        self.transcript_text.setFont(QFont("SF Pro", 12))
+        transcript_layout.addWidget(self.transcript_text)
+        
+        # Transcript actions
+        actions_layout = QHBoxLayout()
+        actions_layout.setSpacing(8)
+        
+        self.copy_btn = QPushButton("Copy Transcript")
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._on_copy_transcript)
+        actions_layout.addWidget(self.copy_btn)
+        
+        self.refresh_transcript_btn = QPushButton("Refresh Transcript")
+        self.refresh_transcript_btn.setEnabled(False)
+        self.refresh_transcript_btn.setToolTip("Reload the transcript from disk")
+        self.refresh_transcript_btn.clicked.connect(self._on_refresh_transcript)
+        actions_layout.addWidget(self.refresh_transcript_btn)
+        
+        self.open_folder_btn = QPushButton("Open Recording Folder")
+        self.open_folder_btn.setEnabled(False)
+        self.open_folder_btn.clicked.connect(self._on_open_folder)
+        actions_layout.addWidget(self.open_folder_btn)
+        
+        actions_layout.addStretch()
+        
+        self.line_count_label = QLabel("Lines: 0")
+        actions_layout.addWidget(self.line_count_label)
+        
+        transcript_layout.addLayout(actions_layout)
+        
+        self.tab_widget.addTab(transcript_tab, "Meeting Transcript")
+        
+        # --- Meeting Tools Tab ---
+        tools_tab = QWidget()
+        tools_tab.setAutoFillBackground(False)
+        tools_layout = QVBoxLayout(tools_tab)
+        tools_layout.setContentsMargins(0, 8, 0, 0)
+        tools_layout.setSpacing(6)
+        
+        # Tool selection row
+        tool_select_layout = QHBoxLayout()
+        self.tool_combo = QComboBox()
+        self.tool_combo.setMinimumWidth(200)
+        self.tool_combo.addItem("Select a tool...", None)
+        self.tool_combo.currentIndexChanged.connect(self._on_tool_changed)
+        tool_select_layout.addWidget(self.tool_combo, stretch=1)
+        
+        self.run_tool_btn = QPushButton("Run")
+        self.run_tool_btn.setProperty("class", "primary")
+        self.run_tool_btn.setEnabled(False)
+        self.run_tool_btn.clicked.connect(self._on_run_tool)
+        tool_select_layout.addWidget(self.run_tool_btn)
+        
+        self.tool_copy_btn = QPushButton("Copy Output")
+        self.tool_copy_btn.setToolTip("Copy tool output to clipboard")
+        self.tool_copy_btn.clicked.connect(self._copy_tool_output)
+        tool_select_layout.addWidget(self.tool_copy_btn)
+        
+        self.cancel_tool_btn = QPushButton("Cancel")
+        self.cancel_tool_btn.setEnabled(False)
+        self.cancel_tool_btn.setVisible(False)
+        self.cancel_tool_btn.clicked.connect(self._on_cancel_tool)
+        tool_select_layout.addWidget(self.cancel_tool_btn)
+        
+        self.tool_elapsed_label = QLabel("")
+        self.tool_elapsed_label.setVisible(False)
+        tool_select_layout.addWidget(self.tool_elapsed_label)
+        
+        tool_select_layout.addStretch()
+        tools_layout.addLayout(tool_select_layout)
+        
+        # --- Separator above tool description ---
+        self.tool_separator = QFrame()
+        self.tool_separator.setFrameShape(QFrame.Shape.HLine)
+        self.tool_separator.setFrameShadow(QFrame.Shadow.Plain)
+        self.tool_separator.setFixedHeight(1)
+        self.tool_separator.setVisible(False)
+        tools_layout.addWidget(self.tool_separator)
+        
+        # --- Tool description (no border) ---
+        self.tool_description_label = QLabel("")
+        self.tool_description_label.setWordWrap(True)
+        self.tool_description_label.setStyleSheet(
+            "color: palette(windowText); font-size: 13px; padding: 2px 0;"
+        )
+        self.tool_description_label.setVisible(False)
+        tools_layout.addWidget(self.tool_description_label)
+        
+        # --- Parameters section (unframed, with spacing above/below) ---
+        tools_layout.addSpacing(6)
+        
+        self.tool_params_toggle = QPushButton("▶ Parameters")
+        self.tool_params_toggle.setFlat(True)
+        self.tool_params_toggle.setStyleSheet(
+            "text-align: left; font-weight: 600; padding: 2px 0;"
+        )
+        self.tool_params_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tool_params_toggle.setVisible(False)
+        self.tool_params_toggle.clicked.connect(self._toggle_tool_params)
+        tools_layout.addWidget(self.tool_params_toggle)
+        
+        self.tool_params_table = QTableWidget(0, 3)
+        self.tool_params_table.setHorizontalHeaderLabels(["Flag", "Parameter", "Value"])
+        self.tool_params_table.horizontalHeader().setStretchLastSection(True)
+        self.tool_params_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.tool_params_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.tool_params_table.verticalHeader().setVisible(False)
+        self.tool_params_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tool_params_table.setMaximumHeight(160)
+        self.tool_params_table.setVisible(False)
+        self.tool_params_table.cellChanged.connect(self._on_tool_param_edited)
+        tools_layout.addWidget(self.tool_params_table)
+        
+        # --- Command preview (inside collapsible section) ---
+        self.tool_command_frame = QFrame()
+        self.tool_command_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.tool_command_frame.setFrameShadow(QFrame.Shadow.Plain)
+        self.tool_command_frame.setStyleSheet(
+            "QFrame { border: 1px solid palette(mid); border-radius: 4px; }"
+        )
+        self.tool_command_frame.setVisible(False)
+        cmd_inner = QVBoxLayout(self.tool_command_frame)
+        cmd_inner.setContentsMargins(8, 6, 8, 6)
+        
+        self.tool_command_label = QLabel("")
+        self.tool_command_label.setObjectName("secondary_label")
+        self.tool_command_label.setWordWrap(True)
+        self.tool_command_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.tool_command_label.setStyleSheet("border: none;")
+        cmd_inner.addWidget(self.tool_command_label)
+        
+        tools_layout.addWidget(self.tool_command_frame)
+        
+        # --- Data Files section (collapsible, shown when tool has data_files) ---
+        self.tool_data_files_toggle = QPushButton("▶ Data Files")
+        self.tool_data_files_toggle.setFlat(True)
+        self.tool_data_files_toggle.setStyleSheet(
+            "text-align: left; font-weight: 600; padding: 2px 0;"
+        )
+        self.tool_data_files_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tool_data_files_toggle.setVisible(False)
+        self.tool_data_files_toggle.clicked.connect(self._toggle_tool_data_files)
+        tools_layout.addWidget(self.tool_data_files_toggle)
+        
+        self.tool_data_files_widget = QWidget()
+        self.tool_data_files_layout = QVBoxLayout(self.tool_data_files_widget)
+        self.tool_data_files_layout.setContentsMargins(4, 0, 0, 0)
+        self.tool_data_files_layout.setSpacing(4)
+        self.tool_data_files_widget.setVisible(False)
+        tools_layout.addWidget(self.tool_data_files_widget)
+        
+        # Output area (always visible)
+        self.tool_output_area = QTextEdit()
+        self.tool_output_area.setReadOnly(True)
+        self.tool_output_area.setPlaceholderText(
+            "Select a tool from the dropdown above and click Run.\n\n"
+            "Tool output will appear here."
+        )
+        self.tool_output_area.setFont(QFont("Menlo", 11))
+        tools_layout.addWidget(self.tool_output_area, stretch=1)
+        
+        self.tab_widget.addTab(tools_tab, "Meeting Tools")
+        
+        main_layout.addWidget(self.tab_widget, stretch=1)
+        
+        # === Separator before status bar ===
+        self.separator_bottom = QFrame()
+        self.separator_bottom.setFrameShape(QFrame.Shape.HLine)
+        self.separator_bottom.setFrameShadow(QFrame.Shadow.Plain)
+        self.separator_bottom.setFixedHeight(1)
+        main_layout.addWidget(self.separator_bottom)
+        
+        # === Apply Modern Styling ===
+        self._apply_styles()
+        
+        # === Status Bar ===
+        # Build a custom status bar layout: [compact_btn] [status_label] ... [version]
+        # We avoid QStatusBar.showMessage() because it hides addWidget items.
+        # Instead, use a permanent widget container on the left with a label we
+        # control ourselves, so the compact button is always visible.
+        status_container = QWidget()
+        status_hlayout = QHBoxLayout(status_container)
+        status_hlayout.setContentsMargins(12, 0, 12, 2)  # match main_layout L/R, 2px bottom gap
+        status_hlayout.setSpacing(8)
+        
+        # --- Left zone: action buttons ---
+        self.compact_btn = QPushButton()
+        self.compact_btn.setFixedSize(20, 20)
+        self.compact_btn.setToolTip("Compact view")
+        self.compact_btn.setIcon(IconManager.get_icon(
+            "chevrons_up", is_dark=self._is_dark_mode(), size=16))
+        self.compact_btn.setFlat(True)
+        self.compact_btn.clicked.connect(self._toggle_compact_mode)
+        status_hlayout.addWidget(self.compact_btn)
+        
+        # --- Centre zone: status message with border ---
+        self._status_msg_label = QLabel("Ready")
+        self._status_msg_label.setObjectName("status_msg")
+        self._status_msg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_hlayout.addWidget(self._status_msg_label, stretch=1)
+        
+        # --- Right zone: version ---
+        self.version_label = QLabel(f"v{APP_VERSION}")
+        self.version_label.setObjectName("secondary_label")
+        status_hlayout.addWidget(self.version_label)
+        
+        self.statusBar().addWidget(status_container, stretch=1)
+        
+        # Redirect statusBar().showMessage() to our custom label so the
+        # compact button is never hidden by temporary messages.
+        self.statusBar().showMessage = self._show_status_message
+    
+    def _show_status_message(self, text: str, timeout: int = 0):
+        """Set status bar text via the custom label (keeps compact button visible)."""
+        self._status_msg_label.setText(text)
+    
+    def _is_dark_mode(self) -> bool:
+        """Determine if dark mode should be used based on theme setting."""
+        if self.theme_mode == "dark":
+            return True
+        elif self.theme_mode == "light":
+            return False
+        else:  # "system"
+            palette = QApplication.palette()
+            return palette.window().color().lightness() < 128
+    
+    def _set_theme(self, mode: str):
+        """Change the application theme."""
+        self.theme_mode = mode
+        self._apply_styles()
+        self.statusBar().showMessage(f"Appearance: {mode.capitalize()}")
+    
+    def _apply_styles(self):
+        """Apply the global application stylesheet.
+        
+        Sets a single comprehensive QSS on QApplication so that every
+        window, dialog, and popup inherits the theme automatically.
+        After swapping the stylesheet, unpolish/polish the entire widget
+        tree so the change takes effect immediately (required for live
+        Light / Dark toggling).
+        """
+        is_dark = self._is_dark_mode()
+        app = QApplication.instance()
+        app.setStyleSheet(get_application_stylesheet(is_dark))
+        
+        # Flush the icon cache so icons re-render with the new tint
+        IconManager.refresh()
+        
+        # Re-apply themed icons (guard: _apply_styles is called early in
+        # _setup_ui before these widgets exist)
+        if hasattr(self, "compact_btn"):
+            self.time_up_btn.setIcon(
+                IconManager.get_icon("arrow_up", is_dark=is_dark, size=20))
+            self.time_down_btn.setIcon(
+                IconManager.get_icon("arrow_down", is_dark=is_dark, size=20))
+            compact_icon = "chevrons_down" if self._compact_mode else "chevrons_up"
+            self.compact_btn.setIcon(
+                IconManager.get_icon(compact_icon, is_dark=is_dark, size=16))
+        
+        # Force every widget in the app to re-read the new stylesheet
+        for widget in app.allWidgets():
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        self.update()
+        
+    def _setup_menubar(self):
+        """Create the application menu bar."""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
+        
+        new_action = QAction("New Recording", self)
+        new_action.setShortcut("Cmd+N")
+        new_action.triggered.connect(self._on_new_recording)
+        file_menu.addAction(new_action)
+        
+        reset_action = QAction("Reset", self)
+        reset_action.setShortcut("Cmd+R")
+        reset_action.triggered.connect(self._on_reset_recording)
+        file_menu.addAction(reset_action)
+        
+        file_menu.addSeparator()
+        
+        open_folder_action = QAction("Open Export Folder", self)
+        open_folder_action.setShortcut("Cmd+O")
+        open_folder_action.triggered.connect(self._on_open_export_folder)
+        file_menu.addAction(open_folder_action)
+        
+        # Edit menu
+        edit_menu = menubar.addMenu("Edit")
+        
+        copy_action = QAction("Copy Transcript", self)
+        copy_action.setShortcut("Cmd+C")
+        copy_action.triggered.connect(self._on_copy_transcript)
+        edit_menu.addAction(copy_action)
+        
+        # View menu
+        view_menu = menubar.addMenu("View")
+        
+        appearance_menu = view_menu.addMenu("Appearance")
+        
+        # Create action group for exclusive selection
+        appearance_group = QActionGroup(self)
+        appearance_group.setExclusive(True)
+        
+        self.theme_system_action = QAction("System", self)
+        self.theme_system_action.setCheckable(True)
+        self.theme_system_action.setChecked(True)
+        self.theme_system_action.triggered.connect(lambda: self._set_theme("system"))
+        appearance_group.addAction(self.theme_system_action)
+        appearance_menu.addAction(self.theme_system_action)
+        
+        self.theme_light_action = QAction("Light", self)
+        self.theme_light_action.setCheckable(True)
+        self.theme_light_action.triggered.connect(lambda: self._set_theme("light"))
+        appearance_group.addAction(self.theme_light_action)
+        appearance_menu.addAction(self.theme_light_action)
+        
+        self.theme_dark_action = QAction("Dark", self)
+        self.theme_dark_action.setCheckable(True)
+        self.theme_dark_action.triggered.connect(lambda: self._set_theme("dark"))
+        appearance_group.addAction(self.theme_dark_action)
+        appearance_menu.addAction(self.theme_dark_action)
+        
+        view_menu.addSeparator()
+        
+        self.privacy_action = QAction("Hide from Screen Sharing", self)
+        self.privacy_action.setCheckable(True)
+        self.privacy_action.setChecked(True)  # Private by default
+        self.privacy_action.setEnabled(_HAS_APPKIT)
+        self.privacy_action.triggered.connect(self._toggle_privacy_mode)
+        view_menu.addAction(self.privacy_action)
+        
+        view_menu.addSeparator()
+        
+        log_action = QAction("Log File...", self)
+        log_action.setShortcut("Cmd+L")
+        log_action.triggered.connect(self._show_log_viewer)
+        view_menu.addAction(log_action)
+        
+        # Also add to macOS app menu as Preferences (standard location for Cmd+,)
+        self.prefs_action = QAction("Preferences...", self)
+        self.prefs_action.setShortcut("Cmd+,")
+        self.prefs_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        self.prefs_action.triggered.connect(self._show_config_editor)
+        view_menu.addAction(self.prefs_action)  # Qt will move this to app menu on macOS
+        
+        # Tools menu
+        tools_menu = menubar.addMenu("Tools")
+        
+        import_tools_action = QAction("Import Tools...", self)
+        import_tools_action.triggered.connect(self._show_tool_import)
+        tools_menu.addAction(import_tools_action)
+        
+        edit_tool_config_action = QAction("Edit Tool Configuration...", self)
+        edit_tool_config_action.triggered.connect(self._show_tool_json_editor)
+        tools_menu.addAction(edit_tool_config_action)
+        
+        edit_data_files_action = QAction("Edit Tool Data Files...", self)
+        edit_data_files_action.triggered.connect(self._show_tool_data_file_picker)
+        tools_menu.addAction(edit_data_files_action)
+        
+        tools_menu.addSeparator()
+        
+        open_tools_folder_action = QAction("Open Tools Folder", self)
+        open_tools_folder_action.triggered.connect(self._open_tools_folder)
+        tools_menu.addAction(open_tools_folder_action)
+        
+        refresh_tools_action = QAction("Refresh Tools", self)
+        refresh_tools_action.triggered.connect(self._scan_tools)
+        tools_menu.addAction(refresh_tools_action)
+        
+        # Maintenance menu
+        maint_menu = menubar.addMenu("Maintenance")
+        
+        self.config_action = QAction("Edit Configuration...", self)
+        self.config_action.setMenuRole(QAction.MenuRole.NoRole)  # Prevent macOS from moving it
+        self.config_action.triggered.connect(self._show_config_editor)
+        maint_menu.addAction(self.config_action)
+        
+        reload_config_action = QAction("Reload Configuration", self)
+        reload_config_action.triggered.connect(self._reload_configuration)
+        maint_menu.addAction(reload_config_action)
+        
+        change_export_action = QAction("Change Export Directory…", self)
+        change_export_action.triggered.connect(self._change_export_directory)
+        maint_menu.addAction(change_export_action)
+        
+        maint_menu.addSeparator()
+        
+        clear_log_action = QAction("Clear Log File", self)
+        clear_log_action.triggered.connect(self._clear_log_file)
+        maint_menu.addAction(clear_log_action)
+        
+        clear_snapshots_action = QAction("Clear All Snapshots", self)
+        clear_snapshots_action.triggered.connect(self._clear_all_snapshots)
+        maint_menu.addAction(clear_snapshots_action)
+        
+        clear_empty_action = QAction("Clear Empty Recordings", self)
+        clear_empty_action.triggered.connect(self._clear_empty_recordings)
+        maint_menu.addAction(clear_empty_action)
+        
+        maint_menu.addSeparator()
+        
+        permissions_action = QAction("Check Permissions", self)
+        permissions_action.triggered.connect(self._check_permissions)
+        maint_menu.addAction(permissions_action)
+        
+        update_action = QAction("Check for Updates...", self)
+        update_action.triggered.connect(self._check_for_updates)
+        maint_menu.addAction(update_action)
+        
+        maint_menu.addSeparator()
+        
+        about_action = QAction(f"About {APP_NAME}", self)
+        about_action.setMenuRole(QAction.MenuRole.AboutRole)
+        about_action.triggered.connect(self._show_about)
+        maint_menu.addAction(about_action)
+        
+    def _setup_tray(self):
+        """Setup system tray icon (optional)."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+            
+        icon_path = resource_path("transcriber.icns")
+        if not icon_path.exists():
+            return
+            
+        self.tray_icon = QSystemTrayIcon(QIcon(str(icon_path)), self)
+        
+        tray_menu = QMenu()
+        show_action = tray_menu.addAction("Show Window")
+        show_action.triggered.connect(self.show)
+        
+        tray_menu.addSeparator()
+        
+        quit_action = tray_menu.addAction("Quit")
+        quit_action.triggered.connect(self.close)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.show()
+        
+    def _load_config(self):
+        """Load application configuration.
+        
+        Resolution order:
+        1. CONFIG_PATH in ~/Library/Application Support/TranscriptRecorder/
+        2. Migrate from OLD_CONFIG_DIR (~/Documents/transcriptrecorder/)
+        3. Show first-run SetupDialog
+        """
+        try:
+            APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+            
+            if not CONFIG_PATH.exists():
+                # Check for legacy config to migrate
+                old_config = OLD_CONFIG_DIR / "config.json"
+                if old_config.exists():
+                    # Load, fix legacy structure, and write to new location
+                    with open(old_config, 'r', encoding='utf-8') as f:
+                        migrated_data = json.load(f)
+                    
+                    # Flatten legacy client_settings.tui nesting
+                    cs = migrated_data.get("client_settings", {})
+                    if "tui" in cs and isinstance(cs["tui"], dict):
+                        tui = cs.pop("tui")
+                        for key, val in tui.items():
+                            if key not in cs:  # don't overwrite direct keys
+                                cs[key] = val
+                        migrated_data["client_settings"] = cs
+                        logger.info("Config migration: flattened client_settings.tui")
+                    
+                    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                        json.dump(migrated_data, f, indent=2)
+                    
+                    # Rename the old file so it's clearly no longer active
+                    deprecated_path = OLD_CONFIG_DIR / "config.json.deprecated"
+                    old_config.rename(deprecated_path)
+                    logger.info(f"Config: migrated from {old_config} to {CONFIG_PATH}, old file renamed to {deprecated_path}")
+                    self.statusBar().showMessage(
+                        "Configuration migrated to Application Support"
+                    )
+                else:
+                    # First-run: show setup dialog
+                    dialog = SetupDialog(self)
+                    if dialog.exec() != QDialog.DialogCode.Accepted:
+                        logger.warning("Config: user cancelled first-run setup")
+                        QMessageBox.critical(
+                            self, "Configuration Required",
+                            "A configuration is required to run the application.\n\n"
+                            "The application will now close."
+                        )
+                        QTimer.singleShot(0, self.close)
+                        return
+            
+            with open(CONFIG_PATH, 'r') as f:
+                self.config = json.load(f)
+                
+            # Set export directory
+            client_settings = self.config.get("client_settings", {})
+            export_dir = client_settings.get("export_directory", str(DEFAULT_EXPORT_DIR))
+            self.export_base_dir = Path(export_dir).expanduser().resolve()
+            self.export_base_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Ensure tools directory exists alongside recordings
+            (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
+            
+            # Configure logging from config
+            setup_logging(self.config)
+            
+            # Populate app selection and discover tools
+            self._populate_app_combo()
+            self._scan_tools()
+            
+            app_count = self.config.get("application_settings", {})
+            log_level = self.config.get("logging", {}).get("level", "INFO")
+            logger.info(f"Config: loaded from {CONFIG_PATH} ({len(app_count)} apps, log_level={log_level})")
+            self.statusBar().showMessage("Configuration loaded")
+            
+        except json.JSONDecodeError as e:
+            QMessageBox.critical(
+                self, "Configuration Error",
+                f"Invalid configuration file:\n{e}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Configuration Error",
+                f"Failed to load configuration:\n{e}"
+            )
+            logger.error(f"Config load error: {e}", exc_info=True)
+    
+    def _populate_app_combo(self):
+        """Fill the application dropdown from config."""
+        if not self.config:
+            return
+            
+        self.app_combo.clear()
+        app_settings = self.config.get("application_settings", {})
+        
+        for app_key, app_data in app_settings.items():
+            display_name = app_data.get("display_name", app_key)
+            self.app_combo.addItem(display_name, app_key)
+            
+        if self.app_combo.count() > 0:
+            self._on_app_changed(0)
+            
+    def _check_permissions(self):
+        """Check and warn about accessibility permissions."""
+        try:
+            if not AXIsProcessTrusted():
+                self._has_accessibility = False
+                QMessageBox.warning(
+                    self, "Accessibility Permission Required",
+                    "This application requires accessibility permissions to read "
+                    "meeting transcripts.\n\n"
+                    "Please grant access in:\n"
+                    "System Settings → Privacy & Security → Accessibility\n\n"
+                    "You may need to restart the application after granting permission."
+                )
+                self.statusBar().showMessage("⚠️ Accessibility permission required")
+            else:
+                self._has_accessibility = True
+                logger.info("Permissions: accessibility access granted")
+        except Exception as e:
+            logger.error(f"Permissions: check failed: {e}")
+        self._update_button_states()
+            
+    def _on_startup_update_available(self, version: str, release_url: str, notes: str, assets: list):
+        """Handle notification that a new version is available (from background check)."""
+        QMessageBox.information(
+            self,
+            "Update Available",
+            f"A new version of {APP_NAME} is available!\n\n"
+            f"Current version: {APP_VERSION}\n"
+            f"Latest version: {version}\n\n"
+            f"You can download it from the Maintenance menu → Check for Updates."
+        )
+    
+    def _on_app_changed(self, index: int):
+        """Handle application selection change."""
+        if index < 0:
+            return
+            
+        self.selected_app_key = self.app_combo.currentData()
+        if self.selected_app_key and self.config:
+            app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
+            self.capture_interval = app_config.get("monitor_interval_seconds", 30)
+            logger.debug(f"App selection changed: {self.selected_app_key} (capture interval: {self.capture_interval}s)")
+            
+    def _on_new_recording(self):
+        """Start a new recording session."""
+        if not self.selected_app_key or not self.config:
+            logger.warning("New session: no application selected")
+            QMessageBox.warning(self, "No Application", "Please select a meeting application first.")
+            return
+            
+        app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
+        if not app_config:
+            logger.error(f"New session: no config found for {self.selected_app_key}")
+            QMessageBox.warning(self, "Configuration Error", f"No configuration found for {self.selected_app_key}")
+            return
+            
+        # Reset state
+        if self.is_recording:
+            self._on_stop_recording()
+            
+        # Create recording directory with date-based structure
+        timestamp = datetime.now()
+        folder_name = f"recording_{timestamp.strftime('%Y-%m-%d_%H%M')}_{self.selected_app_key}"
+        year_folder = timestamp.strftime('%Y')
+        month_folder = timestamp.strftime('%m')
+        self.current_recording_path = self.export_base_dir / "recordings" / year_folder / month_folder / folder_name
+        self.snapshots_path = self.current_recording_path / ".snapshots"
+        self.merged_transcript_path = self.current_recording_path / "meeting_transcript.txt"
+        
+        # Create recorder instance - snapshots go to the hidden .snapshots folder
+        tr_config = app_config.copy()
+        tr_config["base_transcript_directory"] = str(self.snapshots_path)
+        tr_config["name"] = self.selected_app_key
+        
+        try:
+            self.recorder_instance = TranscriptRecorder(app_config=tr_config, logger=logger)
+        except Exception as e:
+            logger.error(f"New session: failed to initialize recorder: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to initialize recorder:\n{e}")
+            return
+            
+        # Update UI
+        self.snapshot_count = 0
+        self.transcript_text.clear()
+        self.line_count_label.setText("Lines: 0")
+        
+        # Set default meeting date/time and clear other fields
+        self.meeting_datetime_input.setText(timestamp.strftime("%m/%d/%Y %I:%M %p"))
+        self.meeting_name_input.clear()
+        self.meeting_notes_input.clear()
+        self.meeting_details_dirty = False
+        
+        self._update_button_states()
+        self.statusBar().showMessage(f"Ready to record — {folder_name}")
+        self._set_status("Session ready", "green")
+        logger.info(f"New session: prepared for {self.selected_app_key} (folder deferred: {self.current_recording_path})")
+        
+        # Set focus to Meeting Name field for quick entry
+        self.meeting_name_input.setFocus()
+    
+    def _on_reset_recording(self):
+        """Reset the current recording session."""
+        if self.is_recording:
+            reply = QMessageBox.question(
+                self, "Auto Capture Running",
+                "Auto capture is currently running. Resetting will stop "
+                "the capture and clear the current session.\n\n"
+                "Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            self._on_stop_recording()
+            
+        self.recorder_instance = None
+        self.current_recording_path = None
+        self.snapshots_path = None
+        self.merged_transcript_path = None
+        self.snapshot_count = 0
+        self.transcript_text.clear()
+        self.line_count_label.setText("Lines: 0")
+        
+        # Clear meeting details
+        self.meeting_name_input.clear()
+        self.meeting_datetime_input.clear()
+        self.meeting_notes_input.clear()
+        self.meeting_details_dirty = False
+        
+        # Reset Meeting Tools panel to default state
+        self.tool_combo.setCurrentIndex(0)
+        self.tool_output_area.clear()
+        self.tool_output_area.setPlaceholderText(
+            "Select a tool from the dropdown above and click Run.\n\n"
+            "Tool output will appear here."
+        )
+        
+        self._update_button_states()
+        self._set_status("Ready", "gray")
+        self.statusBar().showMessage("Session reset")
+        logger.info("Session reset")
+        
+    def _ensure_recorder(self) -> bool:
+        """Create a recorder instance on-demand for a loaded session."""
+        if self.recorder_instance:
+            return True
+        
+        if not self.current_recording_path:
+            return False
+        
+        if not self.selected_app_key or not self.config:
+            QMessageBox.warning(
+                self, "No Application Selected",
+                "Please select a meeting application before capturing."
+            )
+            return False
+        
+        app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
+        if not app_config:
+            QMessageBox.warning(
+                self, "Configuration Error",
+                f"No configuration found for {self.selected_app_key}"
+            )
+            return False
+        
+        self.snapshots_path = self.current_recording_path / ".snapshots"
+        self.merged_transcript_path = self.current_recording_path / "meeting_transcript.txt"
+        
+        tr_config = app_config.copy()
+        tr_config["base_transcript_directory"] = str(self.snapshots_path)
+        tr_config["name"] = self.selected_app_key
+        
+        try:
+            self.recorder_instance = TranscriptRecorder(app_config=tr_config, logger=logger)
+        except Exception as e:
+            logger.error(f"Failed to create recorder for loaded session: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to initialize recorder:\n{e}")
+            return False
+        
+        logger.info(f"Recorder created on-demand for loaded session: {self.selected_app_key}")
+        self._update_button_states()
+        return True
+    
+    def _on_start_recording(self):
+        """Start continuous recording."""
+        if not self._ensure_recorder():
+            logger.warning("Start recording: no active session")
+            return
+        
+        # Switch to transcript tab
+        self.tab_widget.setCurrentIndex(1)  # Meeting Transcript tab
+            
+        self.recording_worker = RecordingWorker(self.capture_interval)
+        self.recording_worker.capture_requested.connect(self._on_auto_capture_requested)
+        self.recording_worker.countdown_tick.connect(self._on_countdown_tick)
+        
+        self.recording_worker.start()
+        self.is_recording = True
+        self._update_button_states()
+        self._set_status("Auto capturing...", "#2ecc71")
+        self.statusBar().showMessage(f"Auto capture running (every {self.capture_interval}s)")
+        logger.info(f"Recording started: auto capture every {self.capture_interval}s")
+        
+    def _on_stop_recording(self):
+        """Stop continuous recording."""
+        logger.info(f"Recording stopped (snapshots taken: {self.snapshot_count})")
+        if self.recording_worker:
+            self.recording_worker.stop()
+            self.recording_worker.wait(5000)  # Wait up to 5 seconds
+            self.recording_worker = None
+            
+        self.is_recording = False
+        self._update_button_states()
+        self._set_status("Stopped", "orange")
+        
+        # Export index file to the .snapshots folder
+        if self.recorder_instance and self.recorder_instance.snapshots:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(self.recorder_instance.export_snapshots_index())
+                logger.debug("Snapshots index file exported")
+            finally:
+                loop.close()
+                
+        self.statusBar().showMessage("Auto capture stopped")
+        
+    def _on_capture_now(self):
+        """Take a manual snapshot and merge into meeting transcript."""
+        self._do_capture_and_merge(auto=False)
+    
+    def _ensure_recording_folder(self) -> bool:
+        """Create the recording folder on disk if it doesn't already exist."""
+        if not self.current_recording_path:
+            return False
+        if self.current_recording_path.exists():
+            return True
+        try:
+            self.current_recording_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Recording folder created: {self.current_recording_path}")
+            return True
+        except OSError as e:
+            logger.error(f"Failed to create recording folder: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to create recording folder:\n{e}")
+            return False
+    
+    def _do_capture_and_merge(self, auto: bool = False):
+        """Unified capture and merge -- single code path for manual and auto capture."""
+        if not self.recorder_instance:
+            if not auto:
+                if not self._ensure_recorder():
+                    logger.warning("Manual capture: no active session")
+                    return
+            else:
+                return
+        
+        if self._is_capturing:
+            logger.debug("Capture already in progress, skipping")
+            return
+        
+        # Ensure the recording folder exists on disk (deferred from New Recording)
+        if not self._ensure_recording_folder():
+            return
+        
+        self._is_capturing = True
+        self._update_button_states()
+        
+        # Switch to transcript tab only on manual capture
+        if not auto:
+            self.tab_widget.setCurrentIndex(1)
+        
+        source = "Auto" if auto else "Manual"
+        self.statusBar().showMessage("Capturing transcript...")
+        QApplication.processEvents()  # Ensure UI updates before blocking call
+        
+        logger.debug(f"{source} capture: starting")
+        
+        loop = asyncio.new_event_loop()
+        try:
+            success, file_path, line_count = loop.run_until_complete(
+                self.recorder_instance.export_transcript_text()
+            )
+            
+            if success and file_path:
+                self.snapshot_count += 1
+                overlap_count = 0
+                
+                if self.merged_transcript_path and self.merged_transcript_path.exists():
+                    merge_ok, _, overlap_count = smart_merge(
+                        str(self.merged_transcript_path),
+                        file_path,
+                        str(self.merged_transcript_path)
+                    )
+                    logger.info(
+                        f"{source} capture: snapshot #{self.snapshot_count} merged "
+                        f"({line_count} lines, {overlap_count} overlap)"
+                    )
+                else:
+                    shutil.copy(file_path, str(self.merged_transcript_path))
+                    logger.info(f"{source} capture: first snapshot saved ({line_count} lines)")
+                
+                # Save meeting details if modified
+                self._save_meeting_details()
+                
+                # Display the merged transcript
+                self._update_transcript_display(str(self.merged_transcript_path), line_count or 0)
+                self.statusBar().showMessage(
+                    f"{source} capture: {line_count} lines (snapshot #{self.snapshot_count})"
+                )
+                self._set_status("Captured", "green")
+            else:
+                logger.warning(f"{source} capture: no transcript data returned")
+                if not auto:
+                    QMessageBox.warning(
+                        self, "Capture Failed",
+                        "Could not capture transcript. Make sure:\n"
+                        "• The meeting application is running\n"
+                        "• Captions/transcript is enabled\n"
+                        "• The transcript window is visible"
+                    )
+                self._set_status("Capture failed", "red")
+        except Exception as e:
+            logger.error(f"{source} capture failed: {e}", exc_info=True)
+            if not auto:
+                QMessageBox.critical(self, "Error", f"Capture failed:\n{e}")
+            self._set_status("Error", "red")
+        finally:
+            loop.close()
+            self._is_capturing = False
+            self._update_button_states()
+            
+    def _on_auto_capture_requested(self):
+        """Handle auto-capture timer requesting a snapshot."""
+        if not self.is_recording:
+            return  # Ignore stale signals after auto capture was stopped
+        self._do_capture_and_merge(auto=True)
+            
+    def _on_countdown_tick(self, seconds: int):
+        """Update countdown display in status bar."""
+        if seconds == 0:
+            self.statusBar().showMessage("Capturing...")
+        else:
+            self.statusBar().showMessage(f"Next capture in {seconds}s")
+        
+    def _update_transcript_display(self, file_path: str, line_count: int = 0):
+        """Update the transcript preview from the merged transcript file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.transcript_text.setText(content)
+            
+            # Count actual lines in the merged file
+            actual_lines = len(content.splitlines())
+            self.line_count_label.setText(f"Lines: {actual_lines}")
+            
+            # Scroll to bottom
+            scrollbar = self.transcript_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+            
+            self.copy_btn.setEnabled(True)
+            self.refresh_transcript_btn.setEnabled(True)
+            self.open_folder_btn.setEnabled(True)
+            logger.debug(f"Transcript display updated ({actual_lines} lines)")
+        except Exception as e:
+            logger.error(f"Failed to update transcript display: {e}")
+            
+    def _copy_tool_output(self):
+        """Copy tool output text area contents to clipboard."""
+        text = self.tool_output_area.toPlainText()
+        if text:
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage("Tool output copied to clipboard")
+    
+    def _on_copy_transcript(self):
+        """Copy transcript to clipboard."""
+        text = self.transcript_text.toPlainText()
+        if text:
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage("Transcript copied to clipboard")
+            
+    def _on_refresh_transcript(self):
+        """Reload the transcript from disk and update the display."""
+        if self.merged_transcript_path and self.merged_transcript_path.exists():
+            self._update_transcript_display(str(self.merged_transcript_path))
+            self.statusBar().showMessage("Transcript refreshed")
+        else:
+            self.statusBar().showMessage("No transcript file found to refresh")
+    
+    def _on_open_folder(self):
+        """Open the current recording folder."""
+        if self.current_recording_path and self.current_recording_path.exists():
+            subprocess.run(["open", str(self.current_recording_path)])
+            
+    def _on_open_export_folder(self):
+        """Open the main export folder."""
+        if self.export_base_dir.exists():
+            subprocess.run(["open", str(self.export_base_dir)])
+    
+    def _on_load_previous_meeting(self):
+        """Load meeting details and transcript from a previous recording folder."""
+        # Default to the recordings directory
+        start_dir = str(self.export_base_dir / "recordings")
+        if not Path(start_dir).exists():
+            start_dir = str(self.export_base_dir)
+        
+        selected_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Select a Previous Recording Folder",
+            start_dir,
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if not selected_dir:
+            return  # User cancelled
+        
+        selected_path = Path(selected_dir)
+        
+        # Validate: must contain at least a meeting_transcript.txt or meeting_details.txt
+        has_transcript = (selected_path / "meeting_transcript.txt").exists()
+        has_details = (selected_path / "meeting_details.txt").exists()
+        
+        if not has_transcript and not has_details:
+            QMessageBox.warning(
+                self, "Invalid Recording Folder",
+                "The selected folder does not contain a meeting_transcript.txt "
+                "or meeting_details.txt file.\n\n"
+                "Please select a valid recording folder."
+            )
+            return
+        
+        # If there's an active auto capture, prompt to confirm
+        if self.is_recording:
+            reply = QMessageBox.question(
+                self, "Auto Capture Running",
+                "Auto capture is currently running. Loading a previous meeting "
+                "will stop the capture and reset the current session.\n\n"
+                "Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            self._on_stop_recording()
+        
+        # Reset current session state
+        self.recorder_instance = None
+        self.snapshot_count = 0
+        self._is_capturing = False
+        
+        # Set paths for the loaded recording
+        self.current_recording_path = selected_path
+        self.snapshots_path = selected_path / ".snapshots"
+        self.merged_transcript_path = selected_path / "meeting_transcript.txt"
+        
+        # Parse meeting_details.txt if it exists
+        self.meeting_datetime_input.clear()
+        self.meeting_name_input.clear()
+        self.meeting_notes_input.clear()
+        
+        if has_details:
+            self._load_meeting_details_from_file(selected_path / "meeting_details.txt")
+        
+        # Load transcript if it exists
+        self.transcript_text.clear()
+        if has_transcript:
+            try:
+                transcript_content = (selected_path / "meeting_transcript.txt").read_text(encoding='utf-8')
+                self.transcript_text.setPlainText(transcript_content)
+                line_count = len(transcript_content.splitlines())
+                self.line_count_label.setText(f"Lines: {line_count}")
+            except Exception as e:
+                logger.error(f"Failed to load transcript: {e}")
+                self.line_count_label.setText("Lines: 0")
+        else:
+            self.line_count_label.setText("Lines: 0")
+        
+        self.meeting_details_dirty = False
+        
+        # Reset Meeting Tools panel
+        self.tool_combo.setCurrentIndex(0)
+        self.tool_output_area.clear()
+        
+        self._update_button_states()
+        
+        folder_name = selected_path.name
+        self._set_status("Loaded previous meeting", "blue")
+        self.statusBar().showMessage(f"Loaded — {folder_name}")
+        logger.info(f"Loaded previous meeting from: {selected_path}")
+        
+        # Switch to Meeting Details tab
+        self.tab_widget.setCurrentIndex(0)
+    
+    def _load_meeting_details_from_file(self, details_path: Path):
+        """Parse a meeting_details.txt file and populate the UI fields."""
+        try:
+            content = details_path.read_text(encoding='utf-8')
+        except Exception as e:
+            logger.error(f"Failed to read meeting details: {e}")
+            return
+        
+        lines = content.splitlines()
+        meeting_name = ""
+        meeting_datetime = ""
+        notes_lines = []
+        in_notes = False
+        
+        for i, line in enumerate(lines):
+            if in_notes:
+                # Skip the dashes separator line immediately after "Notes:"
+                if i > 0 and lines[i - 1].strip() == "Notes:" and line.strip().startswith("---"):
+                    continue
+                notes_lines.append(line)
+            elif line.startswith("Meeting Name:"):
+                meeting_name = line[len("Meeting Name:"):].strip()
+            elif line.startswith("Date/Time:"):
+                meeting_datetime = line[len("Date/Time:"):].strip()
+            elif line.strip() == "Notes:":
+                in_notes = True
+            # Skip separator lines (====)
+        
+        if meeting_name:
+            self.meeting_name_input.setText(meeting_name)
+        if meeting_datetime:
+            # Normalize to GUI format (MM/DD/YYYY hh:mm AM/PM) if stored
+            # in the older TUI format (YYYY-MM-DD HH:MM)
+            meeting_datetime = self._normalize_datetime(meeting_datetime)
+            self.meeting_datetime_input.setText(meeting_datetime)
+        if notes_lines:
+            # Strip trailing empty lines
+            while notes_lines and not notes_lines[-1].strip():
+                notes_lines.pop()
+            self.meeting_notes_input.setPlainText("\n".join(notes_lines))
+            
+    def _update_button_states(self):
+        """Update button enabled states based on current state."""
+        has_recorder = self.recorder_instance is not None
+        has_session = has_recorder or self.current_recording_path is not None
+        has_content = self.snapshot_count > 0
+        has_transcript_text = has_content or bool(self.transcript_text.toPlainText().strip())
+        
+        self.app_combo.setEnabled(not has_session)
+        self.new_btn.setEnabled(not has_session and self._has_accessibility)
+        self.reset_btn.setEnabled(has_session)
+        
+        self.capture_btn.setEnabled(has_session and not self._is_capturing and self._has_accessibility)
+        self.auto_capture_btn.setEnabled(has_session and not self._is_capturing and self._has_accessibility)
+        
+        self.tab_widget.setEnabled(has_session)
+        
+        self.copy_btn.setEnabled(has_transcript_text)
+        self.refresh_transcript_btn.setEnabled(has_transcript_text)
+        self.open_folder_btn.setEnabled(has_transcript_text)
+        
+        self.save_details_btn.setEnabled(has_session)
+        self.open_folder_btn2.setEnabled(has_session)
+        
+        self.time_up_btn.setEnabled(has_session)
+        self.time_down_btn.setEnabled(has_session)
+        
+        has_tool = self.tool_combo.currentData() is not None
+        self.run_tool_btn.setEnabled(has_session and has_tool)
+        
+        self._update_auto_capture_btn_style()
+    
+    def _update_auto_capture_btn_style(self):
+        """Update the auto capture button text and color based on recording state."""
+        if self.is_recording:
+            self.auto_capture_btn.setText("Stop Auto Capture")
+            self.auto_capture_btn.setProperty("class", "danger")
+        else:
+            self.auto_capture_btn.setText("Start Auto Capture")
+            self.auto_capture_btn.setProperty("class", "success")
+        
+        self.auto_capture_btn.style().unpolish(self.auto_capture_btn)
+        self.auto_capture_btn.style().polish(self.auto_capture_btn)
+    
+    def _toggle_compact_mode(self):
+        """Toggle between compact and expanded window views."""
+        self._compact_mode = not self._compact_mode
+        is_dark = self._is_dark_mode()
+        
+        if self._compact_mode:
+            self._expanded_size = self.size()
+            self.tab_widget.hide()
+            self.separator_bottom.hide()
+            self.compact_btn.setIcon(IconManager.get_icon(
+                "chevrons_down", is_dark=is_dark, size=16))
+            self.compact_btn.setToolTip("Expand view")
+            QApplication.processEvents()
+            self.setMinimumHeight(0)
+            self.resize(self.width(), self.minimumSizeHint().height())
+        else:
+            self.tab_widget.show()
+            self.separator_bottom.show()
+            self.compact_btn.setIcon(IconManager.get_icon(
+                "chevrons_up", is_dark=is_dark, size=16))
+            self.compact_btn.setToolTip("Compact view")
+            self.setMinimumHeight(300)
+            self.resize(self._expanded_size)
+    
+    def _on_toggle_auto_capture(self):
+        """Toggle auto capture on/off."""
+        if self.is_recording:
+            self._on_stop_recording()
+        else:
+            self._on_start_recording()
+    
+    def _on_meeting_details_changed(self):
+        """Mark meeting details as modified."""
+        self.meeting_details_dirty = True
+    
+    def _on_round_time_down(self):
+        """Round the time down to the nearest 5 minutes."""
+        self._round_time(-1)
+    
+    def _on_round_time_up(self):
+        """Round the time up to the nearest 5 minutes."""
+        self._round_time(1)
+    
+    # Datetime formats the app recognises (GUI format first, then TUI legacy)
+    _DATETIME_FORMATS = [
+        "%m/%d/%Y %I:%M %p",   # GUI: 02/07/2026 08:45 PM
+        "%Y-%m-%d %H:%M",      # TUI: 2025-08-13 14:30
+    ]
+    _CANONICAL_DT_FMT = _DATETIME_FORMATS[0]
+    
+    def _normalize_datetime(self, text: str) -> str:
+        """Parse a datetime string in any recognised format and return
+        it in the canonical GUI format (MM/DD/YYYY hh:mm AM/PM)."""
+        text = text.strip()
+        for fmt in self._DATETIME_FORMATS:
+            try:
+                dt = datetime.strptime(text, fmt)
+                return dt.strftime(self._CANONICAL_DT_FMT)
+            except ValueError:
+                continue
+        # If nothing matched, return the original text unchanged
+        return text
+    
+    def _parse_datetime(self, text: str):
+        """Try to parse *text* using all recognised datetime formats.
+        Returns a datetime on success or None on failure."""
+        text = text.strip()
+        for fmt in self._DATETIME_FORMATS:
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        return None
+    
+    def _round_time(self, direction: int):
+        """Round the time in the datetime input by 5 minutes."""
+        text = self.meeting_datetime_input.text().strip()
+        if not text:
+            return
+        
+        dt = self._parse_datetime(text)
+        if dt is None:
+            return
+        
+        current_minutes = dt.minute
+        
+        if direction < 0:
+            new_minutes = (current_minutes // 5) * 5
+            if new_minutes == current_minutes:
+                new_minutes -= 5
+        else:
+            new_minutes = ((current_minutes + 4) // 5) * 5
+            if new_minutes == current_minutes:
+                new_minutes += 5
+        
+        if new_minutes >= 60:
+            dt = dt.replace(minute=0) + timedelta(hours=1)
+        elif new_minutes < 0:
+            dt = dt.replace(minute=55) - timedelta(hours=1)
+        else:
+            dt = dt.replace(minute=new_minutes)
+        
+        self.meeting_datetime_input.setText(dt.strftime(self._CANONICAL_DT_FMT))
+    
+    def _save_meeting_details(self, force: bool = False):
+        """Save meeting details to file if modified."""
+        if not self.current_recording_path:
+            return
+        
+        meeting_name = self.meeting_name_input.text().strip()
+        meeting_datetime = self.meeting_datetime_input.text().strip()
+        meeting_notes = self.meeting_notes_input.toPlainText().strip()
+        
+        if not meeting_name and not meeting_datetime and not meeting_notes:
+            return
+        
+        if not self._ensure_recording_folder():
+            return
+        
+        details_path = self.current_recording_path / "meeting_details.txt"
+        file_missing = not details_path.exists()
+        
+        if not force and not self.meeting_details_dirty and not file_missing:
+            return
+        
+        try:
+            with open(details_path, 'w', encoding='utf-8') as f:
+                if meeting_name:
+                    f.write(f"Meeting Name: {meeting_name}\n")
+                    f.write("=" * (len(meeting_name) + 14) + "\n\n")
+                if meeting_datetime:
+                    f.write(f"Date/Time: {meeting_datetime}\n\n")
+                if meeting_notes:
+                    f.write("Notes:\n")
+                    f.write("-" * 40 + "\n")
+                    f.write(meeting_notes + "\n")
+            
+            self.meeting_details_dirty = False
+            logger.debug(f"Meeting details saved to {details_path}")
+        except Exception as e:
+            logger.error(f"Failed to save meeting details: {e}")
+            return
+        
+        # After a successful save, rename the folder to reflect the datetime
+        if meeting_datetime:
+            self._rename_recording_folder_for_datetime(meeting_datetime)
+    
+    # Regex matching the timestamp portion of a recording folder name.
+    # Handles both GUI style (recording_2026-02-07_2045) and
+    # TUI style  (recording_2025-05-22_13-57).
+    _FOLDER_TS_RE = re.compile(
+        r'^(recording_)\d{4}-\d{2}-\d{2}_\d{2}-?\d{2}(.*)'
+    )
+    
+    def _rename_recording_folder_for_datetime(self, meeting_datetime: str):
+        """Rename the recording folder so its embedded timestamp matches
+        the datetime shown in the UI.  Skipped when a capture is running
+        or the folder hasn't been created yet."""
+        if not self.current_recording_path or not self.current_recording_path.exists():
+            return
+        
+        # Never rename while a background capture is in progress
+        if self._is_capturing:
+            return
+        
+        dt = self._parse_datetime(meeting_datetime)
+        if dt is None:
+            return
+        
+        old_name = self.current_recording_path.name
+        match = self._FOLDER_TS_RE.match(old_name)
+        if not match:
+            return  # Folder doesn't follow the naming convention
+        
+        new_timestamp = dt.strftime('%Y-%m-%d_%H%M')
+        new_name = f"{match.group(1)}{new_timestamp}{match.group(2)}"
+        
+        if new_name == old_name:
+            return  # Already in sync
+        
+        new_path = self.current_recording_path.parent / new_name
+        
+        if new_path.exists():
+            logger.warning(f"Cannot rename recording folder: target already exists: {new_path}")
+            return
+        
+        try:
+            self.current_recording_path.rename(new_path)
+            logger.info(f"Recording folder renamed: {old_name} -> {new_name}")
+            
+            # Update all path references
+            self.current_recording_path = new_path
+            self.snapshots_path = new_path / ".snapshots"
+            self.merged_transcript_path = new_path / "meeting_transcript.txt"
+            
+            # Keep the recorder's base directory in sync
+            if self.recorder_instance:
+                self.recorder_instance._transcript_base_dir = self.snapshots_path
+            
+            self.statusBar().showMessage(f"Folder renamed — {new_name}")
+        except OSError as e:
+            logger.error(f"Failed to rename recording folder: {e}")
+    
+    # ------------------------------------------------------------------
+    #  Meeting Tools -- discovery, display, and execution
+    # ------------------------------------------------------------------
+
+    def _toggle_tool_params(self):
+        """Toggle visibility of the parameters table."""
+        visible = not self.tool_params_table.isVisible()
+        self.tool_params_table.setVisible(visible)
+        self.tool_params_toggle.setText(
+            "▼ Parameters" if visible else "▶ Parameters"
+        )
+
+    def _toggle_tool_data_files(self):
+        """Toggle visibility of the data files section."""
+        visible = not self.tool_data_files_widget.isVisible()
+        self.tool_data_files_widget.setVisible(visible)
+        self.tool_data_files_toggle.setText(
+            "▼ Data Files" if visible else "▶ Data Files"
+        )
+
+    def _populate_tool_data_files(self, tool_def: dict):
+        """Build the data files section for the currently selected tool."""
+        while self.tool_data_files_layout.count():
+            child = self.tool_data_files_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        data_files = tool_def.get("data_files", [])
+        tool_dir = Path(tool_def.get("_tool_dir", ""))
+        tool_name = tool_def.get("display_name", "")
+
+        if not data_files:
+            self.tool_data_files_toggle.setVisible(False)
+            self.tool_data_files_widget.setVisible(False)
+            return
+
+        for df in data_files:
+            file_name = df.get("file", "")
+            label = df.get("label", file_name)
+            description = df.get("description", "")
+            editor_type = df.get("editor", "key_value_grid")
+            file_path = tool_dir / file_name
+
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            desc_label = QLabel(f"<b>{label}</b>")
+            if description:
+                desc_label.setToolTip(description)
+            row.addWidget(desc_label, stretch=1)
+
+            edit_btn = QPushButton("Edit")
+            edit_btn.setFixedWidth(60)
+            edit_btn.clicked.connect(
+                lambda checked=False, fp=file_path, et=editor_type,
+                       lbl=label, tn=tool_name: self._open_data_file_editor(fp, et, lbl, tn)
+            )
+            row.addWidget(edit_btn)
+
+            row_widget = QWidget()
+            row_widget.setLayout(row)
+            self.tool_data_files_layout.addWidget(row_widget)
+
+        self.tool_data_files_toggle.setVisible(True)
+        self.tool_data_files_widget.setVisible(False)
+        self.tool_data_files_toggle.setText("▶ Data Files")
+
+    def _open_data_file_editor(self, file_path: Path, editor_type: str,
+                                label: str, tool_name: str):
+        """Open a DataFileEditorDialog for the given data file."""
+        dialog = DataFileEditorDialog(file_path, editor_type, label, tool_name, self)
+        self._data_file_editors.append(dialog)
+        dialog.show()
+
+    def _scan_tools(self):
+        """Scan ``<export_dir>/tools/`` for tool definitions."""
+        self._discovered_tools = {}
+        self.tool_combo.clear()
+        self.tool_combo.addItem("Select a tool...", None)
+        
+        if not self.export_base_dir:
+            return
+        
+        self._tool_scripts_dir = self.export_base_dir / "tools"
+        
+        try:
+            self._tool_scripts_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Tools: failed to create tools directory: {e}")
+            return
+        
+        try:
+            subdirs = sorted(
+                p for p in self._tool_scripts_dir.iterdir() if p.is_dir()
+            )
+        except OSError as e:
+            logger.error(f"Tools: could not list tools directory: {e}")
+            return
+        
+        for tool_dir in subdirs:
+            json_path = tool_dir / "tool.json"
+            if not json_path.exists():
+                json_files = sorted(tool_dir.glob("*.json"))
+                if not json_files:
+                    logger.debug(f"Tools: no .json definition in {tool_dir.name}/ — skipped")
+                    continue
+                json_path = json_files[0]
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    tool_def = json.load(f)
+                
+                if not tool_def.get("display_name") or not tool_def.get("script"):
+                    logger.warning(f"Tools: {tool_dir.name}/{json_path.name} missing 'display_name' or 'script'")
+                    continue
+                
+                script_path = tool_dir / tool_def["script"]
+                if not script_path.exists():
+                    logger.warning(f"Tools: script not found: {script_path}")
+                    continue
+                
+                tool_def["_script_path"] = str(script_path)
+                tool_def["_json_path"] = str(json_path)
+                tool_def["_tool_dir"] = str(tool_dir)
+                
+                tool_key = tool_dir.name
+                self._discovered_tools[tool_key] = tool_def
+                self.tool_combo.addItem(tool_def["display_name"], tool_key)
+                
+                logger.debug(f"Tools: discovered '{tool_def['display_name']}' in {tool_dir.name}/")
+                
+            except json.JSONDecodeError as e:
+                logger.warning(f"Tools: invalid JSON in {tool_dir.name}/{json_path.name}: {e}")
+            except Exception as e:
+                logger.error(f"Tools: error loading {tool_dir.name}/{json_path.name}: {e}")
+        
+        count = len(self._discovered_tools)
+        if count:
+            logger.info(f"Tools: discovered {count} tool(s) in {self._tool_scripts_dir}")
+        else:
+            logger.debug(f"Tools: no tools found in {self._tool_scripts_dir}")
+
+    def _get_builtin_values(self) -> Dict[str, str]:
+        """Return a mapping of built-in parameter names to current app values."""
+        values: Dict[str, str] = {}
+        if self.current_recording_path:
+            values["meeting_directory"] = str(self.current_recording_path)
+        if self.merged_transcript_path:
+            values["meeting_transcript"] = str(self.merged_transcript_path)
+        if self.current_recording_path:
+            values["meeting_details"] = str(self.current_recording_path / "meeting_details.txt")
+        if self.export_base_dir:
+            values["export_directory"] = str(self.export_base_dir)
+        if self.selected_app_key:
+            values["app_name"] = self.selected_app_key
+        return values
+
+    def _on_tool_changed(self, index: int):
+        """Handle tool selection change -- populate the parameters table."""
+        tool_key = self.tool_combo.currentData()
+        has_tool = tool_key is not None
+        has_session = self.recorder_instance is not None or self.current_recording_path is not None
+        is_running = self._tool_runner is not None
+        self.run_tool_btn.setEnabled(has_tool and has_session and not is_running)
+        
+        if not has_tool:
+            self.tool_separator.setVisible(False)
+            self.tool_description_label.setVisible(False)
+            self.tool_params_toggle.setVisible(False)
+            self.tool_params_table.setVisible(False)
+            self.tool_params_table.setRowCount(0)
+            self.tool_command_frame.setVisible(False)
+            self.tool_data_files_toggle.setVisible(False)
+            self.tool_data_files_widget.setVisible(False)
+            self.tool_output_area.clear()
+            return
+        
+        tool_def = self._discovered_tools.get(tool_key, {})
+        description = tool_def.get("description", "")
+        parameters = tool_def.get("parameters", [])
+        
+        self.tool_separator.setVisible(True)
+        self.tool_description_label.setText(description)
+        self.tool_description_label.setVisible(bool(description))
+        
+        builtins = self._get_builtin_values()
+        self.tool_params_table.setRowCount(len(parameters))
+        
+        for row, param in enumerate(parameters):
+            flag = param.get("flag", "")
+            label = param.get("label", flag)
+            builtin_key = param.get("builtin")
+            default = param.get("default", "")
+            
+            flag_item = QTableWidgetItem(flag)
+            flag_item.setFlags(flag_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.tool_params_table.setItem(row, 0, flag_item)
+            
+            label_text = f"{label}  (auto)" if builtin_key else label
+            label_item = QTableWidgetItem(label_text)
+            label_item.setFlags(label_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.tool_params_table.setItem(row, 1, label_item)
+            
+            if builtin_key:
+                value = builtins.get(builtin_key, f"<{builtin_key}>")
+            else:
+                value = str(default)
+            value_item = QTableWidgetItem(value)
+            self.tool_params_table.setItem(row, 2, value_item)
+        
+        has_params = len(parameters) > 0
+        self.tool_params_toggle.setVisible(has_params)
+        if has_params:
+            self.tool_params_table.setVisible(False)
+            self.tool_params_toggle.setText("▶ Parameters")
+        
+        self.tool_command_frame.setVisible(False)
+        
+        self._populate_tool_data_files(tool_def)
+        
+        self._update_tool_output_preview()
+    
+    def _on_tool_param_edited(self, row: int, column: int):
+        """Refresh the command preview when the user edits a parameter value."""
+        if column == 2:
+            self._update_tool_output_preview()
+    
+    def _update_tool_command_preview(self):
+        """Build the command from current table values and show it in the label."""
+        command = self._build_tool_command(preview=True)
+        if command:
+            self.tool_command_label.setText(f"Command: {' '.join(command)}")
+            self.tool_command_frame.setVisible(self.tool_params_table.isVisible())
+        else:
+            self.tool_command_frame.setVisible(False)
+    
+    def _update_tool_output_preview(self):
+        """Show the tool name, run instruction, and command in the output area."""
+        tool_key = self.tool_combo.currentData()
+        if not tool_key:
+            self.tool_output_area.clear()
+            return
+        
+        tool_def = self._discovered_tools.get(tool_key, {})
+        display_name = tool_def.get("display_name", tool_key)
+        
+        command = self._build_tool_command(preview=True)
+        cmd_text = " ".join(command) if command else "<unable to build command>"
+        
+        separator = "—" * 40
+        preview_text = (
+            f"{separator}\n"
+            f"{display_name}\n"
+            f"{separator}\n"
+            f"\n"
+            f"Clicking Run will execute the following command.  "
+            f"The output from {display_name} will be shown here when completed.\n"
+            f"\n"
+            f"command: {cmd_text}\n"
+        )
+        self.tool_output_area.setPlainText(preview_text)
+    
+    def _build_tool_command(self, preview: bool = False) -> Optional[List[str]]:
+        """Read the parameters table and build the command list."""
+        tool_key = self.tool_combo.currentData()
+        if not tool_key:
+            return None
+        
+        tool_def = self._discovered_tools.get(tool_key)
+        if not tool_def:
+            return None
+        
+        script_path = Path(tool_def["_script_path"])
+        if not script_path.exists():
+            if not preview:
+                self.tool_output_area.setPlainText(f"Error: script not found: {script_path}")
+            return None
+        
+        interpreters = {
+            ".sh": "/bin/bash", ".bash": "/bin/bash",
+            ".zsh": "/bin/zsh",
+            ".py": sys.executable,
+        }
+        interpreter = interpreters.get(script_path.suffix.lower())
+        command: List[str] = [interpreter, str(script_path)] if interpreter else [str(script_path)]
+        
+        if not interpreter:
+            try:
+                mode = script_path.stat().st_mode
+                if not (mode & 0o100):
+                    script_path.chmod(mode | 0o755)
+            except OSError as e:
+                logger.warning(f"Tools: could not set execute permission: {e}")
+        
+        parameters = tool_def.get("parameters", [])
+        for row in range(self.tool_params_table.rowCount()):
+            if row >= len(parameters):
+                break
+            param = parameters[row]
+            flag_item = self.tool_params_table.item(row, 0)
+            value_item = self.tool_params_table.item(row, 2)
+            flag = flag_item.text().strip() if flag_item else ""
+            value = value_item.text().strip() if value_item else ""
+            
+            if not flag:
+                continue
+            
+            if param.get("type") == "boolean":
+                if value.lower() in ("true", "1", "yes"):
+                    command.append(flag)
+                continue
+            
+            if value and not value.startswith("<"):
+                command.extend([flag, value])
+            elif param.get("required", False):
+                if not preview:
+                    self.tool_output_area.setPlainText(
+                        f"Error: required parameter '{param.get('label', flag)}' has no value.\n"
+                        "Enter a value in the Parameters table above."
+                    )
+                return None
+        
+        return command
+    
+    @staticmethod
+    def _format_elapsed(seconds: int) -> str:
+        """Return a human-friendly elapsed time string."""
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes, secs = divmod(seconds, 60)
+        if minutes < 60:
+            return f"{minutes}m {secs}s"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}h {minutes}m {secs}s"
+    
+    def _on_tool_timer_tick(self):
+        """Update the elapsed-time label while a tool is running."""
+        elapsed = int(time.time() - self._tool_start_time)
+        elapsed_str = self._format_elapsed(elapsed)
+        self.tool_elapsed_label.setText(elapsed_str)
+        
+        runner = self._tool_runner
+        if isinstance(runner, StreamingToolRunnerWorker):
+            idle = time.time() - runner.last_output_time
+            kill_timeout = getattr(self, "_idle_kill_seconds", 120)
+            warn_timeout = getattr(self, "_idle_warning_seconds", 30)
+            
+            if idle > kill_timeout:
+                logger.warning(f"Tools: idle timeout reached ({idle:.0f}s > {kill_timeout}s), "
+                               f"auto-cancelling")
+                self.statusBar().showMessage(
+                    f"Agent idle for {int(idle)}s — auto-cancelling…"
+                )
+                self._on_cancel_tool()
+                return
+            elif idle > warn_timeout:
+                remaining = int(kill_timeout - idle)
+                self.statusBar().showMessage(
+                    f"Running tool… {elapsed_str} — agent idle for {int(idle)}s "
+                    f"(auto-cancel in {remaining}s)"
+                )
+                return
+        
+        self.statusBar().showMessage(f"Running tool… {elapsed_str}")
+    
+    def _on_cancel_tool(self):
+        """Cancel the currently running tool."""
+        if self._tool_runner:
+            logger.info("Tools: cancel requested by user")
+            self.cancel_tool_btn.setEnabled(False)
+            self.cancel_tool_btn.setText("Cancelling…")
+            self._tool_runner.cancel()
+            logger.debug("Tools: cancel() returned, waiting for worker thread to finish")
+        else:
+            logger.warning("Tools: cancel clicked but no _tool_runner active")
+    
+    def _on_run_tool(self):
+        """Build the command line from the parameters table and run the script."""
+        command = self._build_tool_command()
+        if not command:
+            return
+        
+        tool_key = self.tool_combo.currentData()
+        tool_def = self._discovered_tools.get(tool_key, {})
+        display_name = tool_def.get("display_name", tool_key)
+        tool_dir = tool_def.get("_tool_dir", str(self._tool_scripts_dir))
+        
+        cmd_text = " ".join(command)
+        self.tool_output_area.setPlainText(
+            f"Running: {display_name}\n{'—' * 60}\n\n"
+            f"command: {cmd_text}\n"
+        )
+        
+        self.run_tool_btn.setEnabled(False)
+        self.run_tool_btn.setText("Running…")
+        self.cancel_tool_btn.setText("Cancel")
+        self.cancel_tool_btn.setEnabled(True)
+        self.cancel_tool_btn.setVisible(True)
+        
+        self._tool_start_time = time.time()
+        self.tool_elapsed_label.setText("0s")
+        self.tool_elapsed_label.setVisible(True)
+        if self._tool_elapsed_timer is None:
+            self._tool_elapsed_timer = QTimer(self)
+            self._tool_elapsed_timer.timeout.connect(self._on_tool_timer_tick)
+        self._tool_elapsed_timer.start(1000)
+        
+        self.statusBar().showMessage(f"Running tool: {display_name}")
+        QApplication.processEvents()
+        
+        logger.info(f"Tools: started '{display_name}' → {cmd_text}")
+        
+        self._idle_warning_seconds = tool_def.get("idle_warning_seconds", 30)
+        self._idle_kill_seconds = tool_def.get("idle_kill_seconds", 120)
+        
+        if tool_def.get("streaming", False):
+            parser_name = tool_def.get("stream_parser", "raw")
+            parser_fn = STREAM_PARSERS.get(parser_name, _stream_parser_raw)
+            logger.debug(f"Tools: using streaming worker with parser '{parser_name}'")
+            self._tool_runner = StreamingToolRunnerWorker(
+                command, cwd=tool_dir, parser_fn=parser_fn)
+            self._tool_runner.output_line.connect(self._on_tool_output_line)
+        else:
+            self._tool_runner = ToolRunnerWorker(command, cwd=tool_dir)
+        
+        self._tool_runner.output_ready.connect(self._on_tool_finished)
+        self._tool_runner.start()
+    
+    def _on_tool_output_line(self, text: str):
+        """Append a single streaming line to the tool output area (real-time)."""
+        cursor = self.tool_output_area.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.tool_output_area.setTextCursor(cursor)
+        self.tool_output_area.insertPlainText(text + "\n")
+        scrollbar = self.tool_output_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    def _on_tool_finished(self, stdout: str, stderr: str, exit_code: int):
+        """Handle tool script completion."""
+        logger.debug(f"Tools._on_tool_finished: exit_code={exit_code}, "
+                     f"stdout_len={len(stdout)}, stderr_len={len(stderr)}")
+        if self._tool_elapsed_timer:
+            self._tool_elapsed_timer.stop()
+        
+        elapsed = int(time.time() - self._tool_start_time)
+        elapsed_str = self._format_elapsed(elapsed)
+        
+        tool_key = self.tool_combo.currentData()
+        display_name = self._discovered_tools.get(tool_key, {}).get("display_name", "Tool")
+        
+        cancelled = exit_code == -2
+        is_streaming = isinstance(self._tool_runner, StreamingToolRunnerWorker)
+        
+        current = self.tool_output_area.toPlainText()
+        parts = [current]
+        if not is_streaming and stdout:
+            parts.append(stdout)
+        if stderr:
+            parts.append(f"\n--- stderr ---\n{stderr}")
+        
+        if cancelled:
+            parts.append(f"\n{'—' * 60}\nCancelled after {elapsed_str}")
+        else:
+            parts.append(f"\n{'—' * 60}\nFinished in {elapsed_str} (exit code {exit_code})")
+        
+        self.tool_output_area.setPlainText("\n".join(parts))
+        
+        scrollbar = self.tool_output_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        
+        self.run_tool_btn.setText("Run")
+        self.run_tool_btn.setEnabled(True)
+        self.cancel_tool_btn.setEnabled(False)
+        self.cancel_tool_btn.setVisible(False)
+        self.tool_elapsed_label.setVisible(False)
+        self._tool_runner = None
+        
+        if cancelled:
+            self.statusBar().showMessage(f"Tool cancelled: {display_name} ({elapsed_str})")
+            logger.info(f"Tools: '{display_name}' cancelled after {elapsed_str}")
+        elif exit_code == 0:
+            self.statusBar().showMessage(f"Tool completed: {display_name} ({elapsed_str})")
+            logger.info(f"Tools: '{display_name}' completed in {elapsed_str} (exit code 0)")
+        else:
+            self.statusBar().showMessage(f"Tool failed: {display_name} (exit code {exit_code}, {elapsed_str})")
+            logger.warning(f"Tools: '{display_name}' failed (exit code {exit_code}) after {elapsed_str}")
+    
+    def _on_save_details_clicked(self):
+        """Handle save details button click."""
+        self._save_meeting_details(force=True)
+        self.statusBar().showMessage("Meeting details saved")
+        
+    def _set_status(self, text: str, color: str = "gray"):
+        """Update the status bar message."""
+        self.statusBar().showMessage(text)
+        
+    def _show_about(self):
+        """Show about dialog with GitHub repository link."""
+        github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            f"<h3>{APP_NAME}</h3>"
+            f"<p>Version {APP_VERSION}</p>"
+            f"<p>A user-friendly application for recording meeting transcripts "
+            f"using macOS accessibility APIs.</p>"
+            f"<p>Supports:</p>"
+            f"<ul>"
+            f"<li>Zoom</li>"
+            f"<li>Microsoft Teams</li>"
+            f"<li>WebEx</li>"
+            f"<li>Slack</li>"
+            f"</ul>"
+            f'<p>GitHub: <a href="{github_url}">{github_url}</a></p>'
+        )
+    
+    def _toggle_privacy_mode(self, checked: bool):
+        """Toggle macOS window sharing type to hide/show in screen recordings."""
+        if not _HAS_APPKIT:
+            return
+        
+        try:
+            from gui.constants import NSApp
+            title = self.windowTitle()
+            for ns_window in NSApp().windows():
+                if ns_window.title() == title:
+                    ns_window.setSharingType_(0 if checked else 1)
+                    break
+            
+            if checked:
+                self.statusBar().showMessage("Window hidden from screen sharing")
+                logger.info("Privacy: window hidden from screen sharing")
+            else:
+                self.statusBar().showMessage("Window visible to screen sharing")
+                logger.info("Privacy: window visible to screen sharing")
+        except Exception as e:
+            logger.error(f"Privacy: failed to toggle sharing type: {e}")
+    
+    def _show_log_viewer(self):
+        """Open the log viewer window."""
+        self.log_viewer = LogViewerDialog(self)
+        self.log_viewer.show()
+    
+    def _show_config_editor(self):
+        """Open the configuration editor window."""
+        self.config_editor = ConfigEditorDialog(self)
+        self.config_editor.config_saved.connect(self._reload_configuration)
+        self.config_editor.show()
+    
+    def _show_tool_import(self):
+        """Open the Tool Import dialog."""
+        tools_dir = self.export_base_dir / "tools"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        self._tool_import_dialog = ToolImportDialog(tools_dir, self)
+        self._tool_import_dialog.tools_imported.connect(self._scan_tools)
+        self._tool_import_dialog.show()
+    
+    def _show_tool_json_editor(self):
+        """Open the tool.json editor for a selected tool."""
+        tools_dir = self.export_base_dir / "tools"
+        if not tools_dir.exists():
+            QMessageBox.information(self, "No Tools", "No tools directory found.")
+            return
+
+        tool_dirs = sorted(
+            p for p in tools_dir.iterdir()
+            if p.is_dir() and (p / "tool.json").exists()
+        )
+
+        if not tool_dirs:
+            QMessageBox.information(
+                self, "No Tools",
+                "No tools with a tool.json file were found.\n\n"
+                "Use Tools > Import Tools to install tools first."
+            )
+            return
+
+        if len(tool_dirs) == 1:
+            chosen = tool_dirs[0]
+        else:
+            names = [d.name for d in tool_dirs]
+            name, ok = QInputDialog.getItem(
+                self,
+                "Select Tool",
+                "Choose a tool to edit:",
+                names,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            chosen = tools_dir / name
+
+        tool_json_path = chosen / "tool.json"
+        self._tool_json_editor = ToolJsonEditorDialog(tool_json_path, self)
+        self._tool_json_editor.config_saved.connect(self._scan_tools)
+        self._tool_json_editor.show()
+    
+    def _show_tool_data_file_picker(self):
+        """Show a picker for all editable data files across all discovered tools."""
+        all_data_files: List[tuple] = []
+        for tool_key, tool_def in self._discovered_tools.items():
+            tool_dir = Path(tool_def.get("_tool_dir", ""))
+            tool_name = tool_def.get("display_name", tool_key)
+            for df in tool_def.get("data_files", []):
+                file_name = df.get("file", "")
+                label = df.get("label", file_name)
+                editor_type = df.get("editor", "key_value_grid")
+                file_path = tool_dir / file_name
+                display = f"{tool_name} — {label}"
+                all_data_files.append((display, file_path, editor_type, label, tool_name))
+
+        if not all_data_files:
+            QMessageBox.information(
+                self, "No Data Files",
+                "No tools with editable data files were found.\n\n"
+                "Tools can declare editable data files by adding a\n"
+                "\"data_files\" section to their tool.json."
+            )
+            return
+
+        if len(all_data_files) == 1:
+            _, fp, et, lbl, tn = all_data_files[0]
+            self._open_data_file_editor(fp, et, lbl, tn)
+            return
+
+        names = [item[0] for item in all_data_files]
+        name, ok = QInputDialog.getItem(
+            self,
+            "Edit Data File",
+            "Choose a data file to edit:",
+            names,
+            0,
+            False,
+        )
+        if not ok:
+            return
+        idx = names.index(name)
+        _, fp, et, lbl, tn = all_data_files[idx]
+        self._open_data_file_editor(fp, et, lbl, tn)
+
+    def _open_tools_folder(self):
+        """Open the tools directory in Finder."""
+        tools_dir = self.export_base_dir / "tools"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(tools_dir)])
+    
+    def _reload_configuration(self):
+        """Reload the configuration file."""
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                self.config = json.load(f)
+            
+            setup_logging(self.config)
+            
+            client_settings = self.config.get("client_settings", {})
+            export_dir = client_settings.get("export_directory", str(DEFAULT_EXPORT_DIR))
+            self.export_base_dir = Path(export_dir).expanduser().resolve()
+            self.export_base_dir.mkdir(parents=True, exist_ok=True)
+            (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
+            
+            self._populate_app_combo()
+            self._scan_tools()
+            
+            app_count = len(self.config.get("application_settings", {}))
+            logger.info(f"Config: reloaded from {CONFIG_PATH} ({app_count} apps)")
+            self.statusBar().showMessage("Configuration reloaded")
+            
+        except json.JSONDecodeError as e:
+            QMessageBox.critical(
+                self, "Configuration Error",
+                f"Invalid JSON in configuration file:\n{e}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Configuration Error",
+                f"Failed to reload configuration:\n{e}"
+            )
+    
+    def _change_export_directory(self):
+        """Let the user pick a new export directory and persist the change."""
+        new_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose New Export Directory",
+            str(self.export_base_dir),
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if not new_dir:
+            return
+        
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["export_directory"] = new_dir
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            logger.info(f"Export directory changed to {new_dir}")
+            
+            self._reload_configuration()
+            self.statusBar().showMessage(f"Export directory changed to {new_dir}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Error",
+                f"Failed to update export directory:\n{e}"
+            )
+    
+    def _clear_log_file(self):
+        """Clear the log file."""
+        if current_log_file_path is None:
+            QMessageBox.information(self, "Logging Disabled", "File logging is disabled in configuration.")
+            return
+            
+        reply = QMessageBox.question(
+            self, "Clear Log File",
+            "Are you sure you want to clear the log file?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                if current_log_file_path.exists():
+                    with open(current_log_file_path, 'w', encoding='utf-8') as f:
+                        f.write("")
+                    logger.info("Maintenance: log file cleared")
+                    self.statusBar().showMessage("Log file cleared")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to clear log file: {e}")
+    
+    def _clear_all_snapshots(self):
+        """Remove all .snapshots folders from recordings."""
+        recordings_dir = self.export_base_dir / "recordings"
+        
+        if not recordings_dir.exists():
+            QMessageBox.information(self, "No Recordings", "No recordings folder found.")
+            return
+        
+        snapshots_folders = list(recordings_dir.glob("**/.snapshots"))
+        
+        if not snapshots_folders:
+            QMessageBox.information(self, "No Snapshots", "No snapshot folders found to clear.")
+            return
+        
+        reply = QMessageBox.question(
+            self, "Clear All Snapshots",
+            f"This will remove {len(snapshots_folders)} snapshot folder(s) from your recordings.\n\n"
+            "The merged transcripts (meeting_transcript.txt) will be preserved.\n\n"
+            "This action cannot be undone. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            removed = 0
+            errors = 0
+            for folder in snapshots_folders:
+                try:
+                    shutil.rmtree(folder)
+                    removed += 1
+                except Exception as e:
+                    logger.error(f"Maintenance: failed to remove snapshot folder {folder}: {e}")
+                    errors += 1
+            
+            if errors > 0:
+                QMessageBox.warning(
+                    self, "Partial Success",
+                    f"Removed {removed} snapshot folder(s).\n{errors} folder(s) could not be removed."
+                )
+            else:
+                QMessageBox.information(
+                    self, "Success",
+                    f"Removed {removed} snapshot folder(s)."
+                )
+            
+            logger.info(f"Maintenance: cleared {removed} snapshot folders ({errors} errors)")
+            self.statusBar().showMessage(f"Cleared {removed} snapshot folders")
+    
+    def _clear_empty_recordings(self):
+        """Remove recording folders that contain no files."""
+        recordings_dir = self.export_base_dir / "recordings"
+        
+        if not recordings_dir.exists():
+            QMessageBox.information(self, "No Recordings", "No recordings folder found.")
+            return
+        
+        empty_folders: List[Path] = []
+        for folder in sorted(recordings_dir.glob("**/recording_*")):
+            if not folder.is_dir():
+                continue
+            if self.current_recording_path and folder.resolve() == self.current_recording_path.resolve():
+                continue
+            has_files = any(f.is_file() for f in folder.rglob("*"))
+            if not has_files:
+                empty_folders.append(folder)
+        
+        if not empty_folders:
+            QMessageBox.information(
+                self, "No Empty Recordings",
+                "No empty recording folders found."
+            )
+            return
+        
+        reply = QMessageBox.question(
+            self, "Clear Empty Recordings",
+            f"Found {len(empty_folders)} empty recording folder(s):\n\n"
+            + "\n".join(f"  • {f.name}" for f in empty_folders[:10])
+            + ("\n  ..." if len(empty_folders) > 10 else "")
+            + "\n\nThese folders contain no files. Remove them?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            removed = 0
+            errors = 0
+            for folder in empty_folders:
+                try:
+                    shutil.rmtree(folder)
+                    removed += 1
+                except Exception as e:
+                    logger.error(f"Maintenance: failed to remove empty folder {folder}: {e}")
+                    errors += 1
+            
+            if errors > 0:
+                QMessageBox.warning(
+                    self, "Partial Success",
+                    f"Removed {removed} empty folder(s).\n{errors} folder(s) could not be removed."
+                )
+            else:
+                QMessageBox.information(
+                    self, "Success",
+                    f"Removed {removed} empty recording folder(s)."
+                )
+            
+            logger.info(f"Maintenance: cleared {removed} empty recording folders ({errors} errors)")
+            self.statusBar().showMessage(f"Cleared {removed} empty recording folders")
+    
+    def _check_for_updates(self):
+        """Check GitHub releases for a newer version."""
+        self.statusBar().showMessage("Checking for updates...")
+        
+        if GITHUB_OWNER == "YOUR_GITHUB_USERNAME":
+            logger.warning("Update check: skipped (GITHUB_OWNER not configured)")
+            QMessageBox.information(
+                self, "Update Check",
+                "Update checking is not configured.\n\n"
+                "Please update GITHUB_OWNER and GITHUB_REPO in version.py "
+                "with your GitHub repository information."
+            )
+            self.statusBar().showMessage("Ready")
+            return
+        
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+        logger.debug(f"Update check: querying {url} (current version: {APP_VERSION})")
+        
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={"Accept": "application/vnd.github.v3+json", "User-Agent": f"{APP_NAME}/{APP_VERSION}"}
+            )
+            
+            logger.debug("Update check: sending request to GitHub API")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+            
+            latest_version = data.get("tag_name", "").lstrip("v")
+            release_url = data.get("html_url", "")
+            release_notes = data.get("body", "No release notes available.")
+            assets = data.get("assets", [])
+            
+            logger.debug(f"Update check: latest release={latest_version}, assets={len(assets)}")
+            
+            current_parts = [int(x) for x in APP_VERSION.split(".")]
+            latest_parts = [int(x) for x in latest_version.split(".")]
+            
+            while len(current_parts) < len(latest_parts):
+                current_parts.append(0)
+            while len(latest_parts) < len(current_parts):
+                latest_parts.append(0)
+            
+            logger.debug(f"Update check: comparing versions current={current_parts} vs latest={latest_parts}")
+            
+            if latest_parts > current_parts:
+                logger.info(f"Update check: new version available ({latest_version}, current: {APP_VERSION})")
+                download_asset = None
+                for asset in assets:
+                    name = asset.get("name", "").lower()
+                    logger.debug(f"Update check: found asset: {name}")
+                    if name.endswith(".dmg") or name.endswith(".zip"):
+                        download_asset = asset
+                        break
+                
+                msg = (
+                    f"A new version is available!\n\n"
+                    f"Current version: {APP_VERSION}\n"
+                    f"Latest version: {latest_version}\n\n"
+                    f"Release notes:\n{release_notes[:500]}{'...' if len(release_notes) > 500 else ''}"
+                )
+                
+                if download_asset:
+                    logger.debug(f"Update check: downloadable asset found: {download_asset.get('name')}")
+                    reply = QMessageBox.question(
+                        self, "Update Available",
+                        f"{msg}\n\nWould you like to download and install the update?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    
+                    if reply == QMessageBox.StandardButton.Yes:
+                        self._download_and_install_update(download_asset, latest_version)
+                else:
+                    logger.debug("Update check: no downloadable asset (.dmg or .zip) found")
+                    reply = QMessageBox.question(
+                        self, "Update Available",
+                        f"{msg}\n\nWould you like to open the release page in your browser?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        subprocess.run(["open", release_url])
+            else:
+                logger.info(f"Update check: already on latest version ({APP_VERSION})")
+                QMessageBox.information(
+                    self, "No Updates",
+                    f"You're running the latest version ({APP_VERSION})."
+                )
+            
+            self.statusBar().showMessage("Ready")
+            
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                logger.warning(f"Update check: no releases found (HTTP 404)")
+                QMessageBox.information(
+                    self, "No Releases",
+                    f"No releases have been published yet.\n\n"
+                    f"You're running version {APP_VERSION}.\n\n"
+                    f"Checked: {url}"
+                )
+            else:
+                logger.error(f"Update check: HTTP error {e.code} {e.reason} ({url})")
+                QMessageBox.warning(
+                    self, "Update Check Failed",
+                    f"HTTP Error {e.code}: {e.reason}\n\nURL: {url}"
+                )
+            self.statusBar().showMessage("Ready")
+        except urllib.error.URLError as e:
+            logger.error(f"Update check: connection failed: {e} ({url})")
+            QMessageBox.warning(
+                self, "Update Check Failed",
+                f"Could not connect to GitHub to check for updates.\n\nError: {e}\n\nURL: {url}"
+            )
+            self.statusBar().showMessage("Update check failed")
+        except Exception as e:
+            logger.error(f"Update check: unexpected error: {e} ({url})", exc_info=True)
+            QMessageBox.warning(
+                self, "Update Check Failed",
+                f"An error occurred while checking for updates.\n\nError: {e}\n\nURL: {url}"
+            )
+            self.statusBar().showMessage("Update check failed")
+    
+    def _download_and_install_update(self, asset: dict, version: str):
+        """Download and install an update from GitHub releases."""
+        download_url = asset.get("browser_download_url")
+        filename = asset.get("name")
+        
+        if not download_url or not filename:
+            logger.error("Update download: missing download URL or filename")
+            QMessageBox.warning(self, "Download Failed", "Could not get download URL.")
+            return
+        
+        try:
+            self.statusBar().showMessage(f"Downloading {filename}...")
+            
+            temp_dir = Path(tempfile.gettempdir()) / "TranscriptRecorderUpdate"
+            temp_dir.mkdir(exist_ok=True)
+            download_path = temp_dir / filename
+            
+            request = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": APP_NAME}
+            )
+            
+            with urllib.request.urlopen(request, timeout=60) as response:
+                with open(download_path, 'wb') as f:
+                    f.write(response.read())
+            
+            logger.info(f"Update download: saved {filename} to {download_path}")
+            
+            if filename.endswith(".dmg"):
+                self.statusBar().showMessage("Opening installer...")
+                subprocess.run(["open", str(download_path)])
+                
+                QMessageBox.information(
+                    self, "Update Downloaded",
+                    f"The update has been downloaded and opened.\n\n"
+                    f"Please drag the new version to your Applications folder "
+                    f"to complete the update, then restart the application."
+                )
+            elif filename.endswith(".zip"):
+                self.statusBar().showMessage("Extracting update...")
+                extract_dir = temp_dir / f"TranscriptRecorder-{version}"
+                shutil.unpack_archive(str(download_path), str(extract_dir))
+                subprocess.run(["open", str(extract_dir)])
+                
+                QMessageBox.information(
+                    self, "Update Downloaded",
+                    f"The update has been downloaded and extracted.\n\n"
+                    f"Please move the new application to your Applications folder "
+                    f"to complete the update, then restart the application."
+                )
+            
+            self.statusBar().showMessage("Update ready to install")
+            
+        except Exception as e:
+            logger.error(f"Update download: failed to download {filename}: {e}", exc_info=True)
+            QMessageBox.warning(
+                self, "Download Failed",
+                f"Failed to download the update.\n\nError: {e}"
+            )
+            self.statusBar().showMessage("Update download failed")
+        
+    def closeEvent(self, event):
+        """Handle window close."""
+        if self.is_recording:
+            reply = QMessageBox.question(
+                self,
+                "Recording in Progress",
+                "Recording is still in progress. Stop and exit?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            self._on_stop_recording()
+            
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
+        
+        logger.info("Application window closed")
+        event.accept()
+
+
+def main():
+    """Application entry point."""
+    if sys.platform != "darwin":
+        print("This application only runs on macOS.")
+        sys.exit(1)
+        
+    app = QApplication(sys.argv)
+    
+    # macOS-specific settings
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
+    app.setOrganizationName("TranscriptRecorder")
+    
+    # Set app icon
+    icon_path = resource_path("transcriber.icns")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    
+    logger.info(f"Application starting (version {APP_VERSION})")
+    
+    # Create and show main window
+    window = TranscriptRecorderApp()
+    window.show()
+    
+    exit_code = app.exec()
+    logger.info(f"Application exiting (code {exit_code})")
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
