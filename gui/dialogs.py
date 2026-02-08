@@ -15,9 +15,10 @@ from PyQt6.QtWidgets import (
     QGroupBox, QLineEdit, QInputDialog, QDialog,
 )
 
+import gui.constants as _constants
 from gui.constants import (
     APP_NAME, APP_VERSION, APP_SUPPORT_DIR, CONFIG_PATH,
-    DEFAULT_EXPORT_DIR, current_log_file_path, logger, resource_path,
+    DEFAULT_EXPORT_DIR, logger, resource_path,
 )
 from version import GITHUB_OWNER, GITHUB_REPO
 
@@ -70,7 +71,7 @@ class LogViewerDialog(QMainWindow):
     
     def _load_log(self):
         """Load the last 200 lines of the log file."""
-        log_path = current_log_file_path
+        log_path = _constants.current_log_file_path
         if log_path is None:
             self.log_text.setPlainText("File logging is disabled in configuration.")
             return
@@ -98,7 +99,7 @@ class LogViewerDialog(QMainWindow):
     
     def _clear_log(self):
         """Clear the log file."""
-        log_path = current_log_file_path
+        log_path = _constants.current_log_file_path
         if log_path is None:
             return
             

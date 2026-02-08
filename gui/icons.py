@@ -1,6 +1,8 @@
 """
 Centralized IconManager for rendering Lucide SVG icons as high-DPI QIcons.
 
+https://lucide.dev/icons/
+
 Icons are dynamically tinted to match the macOS semantic theme defined in
 gui/styles.py.  Renders via QSvgRenderer onto a QPixmap, accounting for
 devicePixelRatioF() so that icons stay sharp on Retina displays.
@@ -118,6 +120,46 @@ _SVG_SOURCES: dict[str, str] = {
         '<path d="M15 11a1 1 0 0 0 1 1h2.939a1 1 0 0 1 .75 1.811l-6.835 6.836'
         'a1.207 1.207 0 0 1-1.707 0L4.31 13.81a1 1 0 0 1 .75-1.811H8a1 1 0 0 '
         '0 1-1V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1z"/></svg>'
+    ),
+    "copy": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>'
+        '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>'
+    ),
+    "download": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/>'
+        '<path d="M19 21H5"/></svg>'
+    ),
+    "save": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5'
+        'a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>'
+        '<path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/>'
+        '<path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>'
+    ),
+    "folder_open": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6'
+        'a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9'
+        'l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>'
+    ),
+    "refresh": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>'
+        '<path d="M21 3v5h-5"/>'
+        '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>'
+        '<path d="M8 16H3v5"/></svg>'
     ),
 }
 

@@ -30,9 +30,10 @@ from transcript_recorder import TranscriptRecorder, AXIsProcessTrusted
 from transcript_utils import smart_merge
 from version import __version__, GITHUB_OWNER, GITHUB_REPO
 
+import gui.constants as _constants
 from gui.constants import (
     APP_NAME, APP_VERSION, APP_SUPPORT_DIR, CONFIG_PATH, LOG_DIR,
-    DEFAULT_EXPORT_DIR, OLD_CONFIG_DIR, logger, current_log_file_path,
+    DEFAULT_EXPORT_DIR, OLD_CONFIG_DIR, logger,
     setup_logging, resource_path, _HAS_APPKIT,
 )
 from gui.styles import get_application_stylesheet
@@ -259,30 +260,58 @@ class TranscriptRecorderApp(QMainWindow):
         notes_label = QLabel("Meeting Notes:")
         details_layout.addWidget(notes_label)
         
+        # Notes text area with vertical button bar on the right
+        details_notes_row = QHBoxLayout()
+        details_notes_row.setSpacing(6)
+        
         self.meeting_notes_input = QTextEdit()
         self.meeting_notes_input.setPlaceholderText("Enter meeting notes, attendees, action items, etc...")
         self.meeting_notes_input.setFont(QFont("SF Pro", 12))
         self.meeting_notes_input.textChanged.connect(self._on_meeting_details_changed)
-        details_layout.addWidget(self.meeting_notes_input)
+        details_notes_row.addWidget(self.meeting_notes_input)
         
-        # Meeting Details actions
-        details_actions_layout = QHBoxLayout()
-        details_actions_layout.setSpacing(8)
+        # Vertical button bar
+        details_btn_bar = QFrame()
+        details_btn_bar.setFrameShape(QFrame.Shape.StyledPanel)
+        details_btn_bar.setStyleSheet(
+            "QFrame { border: 1px solid palette(mid); border-radius: 4px; }"
+        )
+        details_btn_bar_layout = QVBoxLayout(details_btn_bar)
+        details_btn_bar_layout.setContentsMargins(2, 4, 2, 4)
+        details_btn_bar_layout.setSpacing(2)
         
-        self.save_details_btn = QPushButton("Save Details")
-        self.save_details_btn.setProperty("class", "primary")
+        btn_style = (
+            "QPushButton { background: transparent; border: none; padding: 4px; }"
+            "QPushButton:hover { background: palette(mid); border-radius: 4px; }"
+        )
+        
+        self.save_details_btn = QPushButton()
+        self.save_details_btn.setIcon(
+            IconManager.get_icon("save", is_dark=is_dark, size=16))
+        self.save_details_btn.setIconSize(QSize(16, 16))
+        self.save_details_btn.setFixedSize(28, 28)
+        self.save_details_btn.setToolTip("Save meeting details")
+        self.save_details_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_details_btn.setStyleSheet(btn_style)
         self.save_details_btn.setEnabled(False)
         self.save_details_btn.clicked.connect(self._on_save_details_clicked)
-        details_actions_layout.addWidget(self.save_details_btn)
+        details_btn_bar_layout.addWidget(self.save_details_btn)
         
-        self.open_folder_btn2 = QPushButton("Open Recording Folder")
+        self.open_folder_btn2 = QPushButton()
+        self.open_folder_btn2.setIcon(
+            IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
+        self.open_folder_btn2.setIconSize(QSize(16, 16))
+        self.open_folder_btn2.setFixedSize(28, 28)
+        self.open_folder_btn2.setToolTip("Open recording folder")
+        self.open_folder_btn2.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.open_folder_btn2.setStyleSheet(btn_style)
         self.open_folder_btn2.setEnabled(False)
         self.open_folder_btn2.clicked.connect(self._on_open_folder)
-        details_actions_layout.addWidget(self.open_folder_btn2)
+        details_btn_bar_layout.addWidget(self.open_folder_btn2)
         
-        details_actions_layout.addStretch()
+        details_notes_row.addWidget(details_btn_bar, alignment=Qt.AlignmentFlag.AlignTop)
         
-        details_layout.addLayout(details_actions_layout)
+        details_layout.addLayout(details_notes_row)
         
         self.tab_widget.addTab(details_tab, "Meeting Details")
         
@@ -291,6 +320,10 @@ class TranscriptRecorderApp(QMainWindow):
         transcript_tab.setAutoFillBackground(False)
         transcript_layout = QVBoxLayout(transcript_tab)
         transcript_layout.setContentsMargins(0, 8, 0, 0)
+        
+        # Transcript text area with vertical button bar on the right
+        transcript_row = QHBoxLayout()
+        transcript_row.setSpacing(6)
         
         self.transcript_text = QTextEdit()
         self.transcript_text.setReadOnly(True)
@@ -302,34 +335,62 @@ class TranscriptRecorderApp(QMainWindow):
             "3. Click 'New Recording' then 'Capture Now' or 'Start Auto Capture'"
         )
         self.transcript_text.setFont(QFont("SF Pro", 12))
-        transcript_layout.addWidget(self.transcript_text)
+        transcript_row.addWidget(self.transcript_text)
         
-        # Transcript actions
-        actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(8)
+        # Vertical button bar
+        transcript_btn_bar = QFrame()
+        transcript_btn_bar.setFrameShape(QFrame.Shape.StyledPanel)
+        transcript_btn_bar.setStyleSheet(
+            "QFrame { border: 1px solid palette(mid); border-radius: 4px; }"
+        )
+        transcript_btn_bar_layout = QVBoxLayout(transcript_btn_bar)
+        transcript_btn_bar_layout.setContentsMargins(2, 4, 2, 4)
+        transcript_btn_bar_layout.setSpacing(2)
         
-        self.copy_btn = QPushButton("Copy Transcript")
+        btn_style = (
+            "QPushButton { background: transparent; border: none; padding: 4px; }"
+            "QPushButton:hover { background: palette(mid); border-radius: 4px; }"
+        )
+        
+        self.copy_btn = QPushButton()
+        self.copy_btn.setIcon(
+            IconManager.get_icon("copy", is_dark=is_dark, size=16))
+        self.copy_btn.setIconSize(QSize(16, 16))
+        self.copy_btn.setFixedSize(28, 28)
+        self.copy_btn.setToolTip("Copy transcript to clipboard")
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.setStyleSheet(btn_style)
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self._on_copy_transcript)
-        actions_layout.addWidget(self.copy_btn)
+        transcript_btn_bar_layout.addWidget(self.copy_btn)
         
-        self.refresh_transcript_btn = QPushButton("Refresh Transcript")
+        self.refresh_transcript_btn = QPushButton()
+        self.refresh_transcript_btn.setIcon(
+            IconManager.get_icon("refresh", is_dark=is_dark, size=16))
+        self.refresh_transcript_btn.setIconSize(QSize(16, 16))
+        self.refresh_transcript_btn.setFixedSize(28, 28)
+        self.refresh_transcript_btn.setToolTip("Reload transcript from disk")
+        self.refresh_transcript_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_transcript_btn.setStyleSheet(btn_style)
         self.refresh_transcript_btn.setEnabled(False)
-        self.refresh_transcript_btn.setToolTip("Reload the transcript from disk")
         self.refresh_transcript_btn.clicked.connect(self._on_refresh_transcript)
-        actions_layout.addWidget(self.refresh_transcript_btn)
+        transcript_btn_bar_layout.addWidget(self.refresh_transcript_btn)
         
-        self.open_folder_btn = QPushButton("Open Recording Folder")
+        self.open_folder_btn = QPushButton()
+        self.open_folder_btn.setIcon(
+            IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
+        self.open_folder_btn.setIconSize(QSize(16, 16))
+        self.open_folder_btn.setFixedSize(28, 28)
+        self.open_folder_btn.setToolTip("Open recording folder")
+        self.open_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.open_folder_btn.setStyleSheet(btn_style)
         self.open_folder_btn.setEnabled(False)
         self.open_folder_btn.clicked.connect(self._on_open_folder)
-        actions_layout.addWidget(self.open_folder_btn)
+        transcript_btn_bar_layout.addWidget(self.open_folder_btn)
         
-        actions_layout.addStretch()
+        transcript_row.addWidget(transcript_btn_bar, alignment=Qt.AlignmentFlag.AlignTop)
         
-        self.line_count_label = QLabel("Lines: 0")
-        actions_layout.addWidget(self.line_count_label)
-        
-        transcript_layout.addLayout(actions_layout)
+        transcript_layout.addLayout(transcript_row)
         
         self.tab_widget.addTab(transcript_tab, "Meeting Transcript")
         
@@ -353,11 +414,6 @@ class TranscriptRecorderApp(QMainWindow):
         self.run_tool_btn.setEnabled(False)
         self.run_tool_btn.clicked.connect(self._on_run_tool)
         tool_select_layout.addWidget(self.run_tool_btn)
-        
-        self.tool_copy_btn = QPushButton("Copy Output")
-        self.tool_copy_btn.setToolTip("Copy tool output to clipboard")
-        self.tool_copy_btn.clicked.connect(self._copy_tool_output)
-        tool_select_layout.addWidget(self.tool_copy_btn)
         
         self.cancel_tool_btn = QPushButton("Cancel")
         self.cancel_tool_btn.setEnabled(False)
@@ -456,7 +512,10 @@ class TranscriptRecorderApp(QMainWindow):
         self.tool_data_files_widget.setVisible(False)
         tools_layout.addWidget(self.tool_data_files_widget)
         
-        # Output area (always visible)
+        # Output area (always visible) with vertical button bar on the right
+        tool_output_row = QHBoxLayout()
+        tool_output_row.setSpacing(6)
+        
         self.tool_output_area = QTextEdit()
         self.tool_output_area.setReadOnly(True)
         self.tool_output_area.setPlaceholderText(
@@ -464,7 +523,48 @@ class TranscriptRecorderApp(QMainWindow):
             "Tool output will appear here."
         )
         self.tool_output_area.setFont(QFont("Menlo", 11))
-        tools_layout.addWidget(self.tool_output_area, stretch=1)
+        tool_output_row.addWidget(self.tool_output_area)
+        
+        # Vertical button bar
+        tool_btn_bar = QFrame()
+        tool_btn_bar.setFrameShape(QFrame.Shape.StyledPanel)
+        tool_btn_bar.setStyleSheet(
+            "QFrame { border: 1px solid palette(mid); border-radius: 4px; }"
+        )
+        tool_btn_bar_layout = QVBoxLayout(tool_btn_bar)
+        tool_btn_bar_layout.setContentsMargins(2, 4, 2, 4)
+        tool_btn_bar_layout.setSpacing(2)
+        
+        btn_style = (
+            "QPushButton { background: transparent; border: none; padding: 4px; }"
+            "QPushButton:hover { background: palette(mid); border-radius: 4px; }"
+        )
+        
+        self.tool_copy_btn = QPushButton()
+        self.tool_copy_btn.setIcon(
+            IconManager.get_icon("copy", is_dark=is_dark, size=16))
+        self.tool_copy_btn.setIconSize(QSize(16, 16))
+        self.tool_copy_btn.setFixedSize(28, 28)
+        self.tool_copy_btn.setToolTip("Copy output to clipboard")
+        self.tool_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tool_copy_btn.setStyleSheet(btn_style)
+        self.tool_copy_btn.clicked.connect(self._copy_tool_output)
+        tool_btn_bar_layout.addWidget(self.tool_copy_btn)
+        
+        self.tool_download_btn = QPushButton()
+        self.tool_download_btn.setIcon(
+            IconManager.get_icon("download", is_dark=is_dark, size=16))
+        self.tool_download_btn.setIconSize(QSize(16, 16))
+        self.tool_download_btn.setFixedSize(28, 28)
+        self.tool_download_btn.setToolTip("Save output to file")
+        self.tool_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tool_download_btn.setStyleSheet(btn_style)
+        self.tool_download_btn.clicked.connect(self._download_tool_output)
+        tool_btn_bar_layout.addWidget(self.tool_download_btn)
+        
+        tool_output_row.addWidget(tool_btn_bar, alignment=Qt.AlignmentFlag.AlignTop)
+        
+        tools_layout.addLayout(tool_output_row, stretch=1)
         
         self.tab_widget.addTab(tools_tab, "Meeting Tools")
         
@@ -935,7 +1035,7 @@ class TranscriptRecorderApp(QMainWindow):
         # Update UI
         self.snapshot_count = 0
         self.transcript_text.clear()
-        self.line_count_label.setText("Lines: 0")
+        self.transcript_text.setToolTip("Lines: 0")
         
         # Set default meeting date/time and clear other fields
         self.meeting_datetime_input.setText(timestamp.strftime("%m/%d/%Y %I:%M %p"))
@@ -972,7 +1072,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.merged_transcript_path = None
         self.snapshot_count = 0
         self.transcript_text.clear()
-        self.line_count_label.setText("Lines: 0")
+        self.transcript_text.setToolTip("Lines: 0")
         
         # Clear meeting details
         self.meeting_name_input.clear()
@@ -987,6 +1087,9 @@ class TranscriptRecorderApp(QMainWindow):
             "Select a tool from the dropdown above and click Run.\n\n"
             "Tool output will appear here."
         )
+        
+        # Switch back to Meeting Details tab
+        self.tab_widget.setCurrentIndex(0)
         
         self._update_button_states()
         self._set_status("Ready", "gray")
@@ -1203,7 +1306,7 @@ class TranscriptRecorderApp(QMainWindow):
             
             # Count actual lines in the merged file
             actual_lines = len(content.splitlines())
-            self.line_count_label.setText(f"Lines: {actual_lines}")
+            self.transcript_text.setToolTip(f"Lines: {actual_lines}")
             
             # Scroll to bottom
             scrollbar = self.transcript_text.verticalScrollBar()
@@ -1222,6 +1325,29 @@ class TranscriptRecorderApp(QMainWindow):
         if text:
             QApplication.clipboard().setText(text)
             self.statusBar().showMessage("Tool output copied to clipboard")
+    
+    def _download_tool_output(self):
+        """Save tool output to a text file chosen by the user."""
+        text = self.tool_output_area.toPlainText()
+        if not text:
+            self.statusBar().showMessage("No output to save")
+            return
+        
+        tool_key = self.tool_combo.currentData() or "tool"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{tool_key}_output_{timestamp}.txt"
+        
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Tool Output", default_name,
+            "Text Files (*.txt);;All Files (*)")
+        if not path:
+            return
+        
+        try:
+            Path(path).write_text(text, encoding="utf-8")
+            self.statusBar().showMessage(f"Output saved to {path}")
+        except OSError as e:
+            QMessageBox.warning(self, "Save Error", f"Could not save file:\n{e}")
     
     def _on_copy_transcript(self):
         """Copy transcript to clipboard."""
@@ -1319,12 +1445,12 @@ class TranscriptRecorderApp(QMainWindow):
                 transcript_content = (selected_path / "meeting_transcript.txt").read_text(encoding='utf-8')
                 self.transcript_text.setPlainText(transcript_content)
                 line_count = len(transcript_content.splitlines())
-                self.line_count_label.setText(f"Lines: {line_count}")
+                self.transcript_text.setToolTip(f"Lines: {line_count}")
             except Exception as e:
                 logger.error(f"Failed to load transcript: {e}")
-                self.line_count_label.setText("Lines: 0")
+                self.transcript_text.setToolTip("Lines: 0")
         else:
-            self.line_count_label.setText("Lines: 0")
+            self.transcript_text.setToolTip("Lines: 0")
         
         self.meeting_details_dirty = False
         
@@ -1633,9 +1759,37 @@ class TranscriptRecorderApp(QMainWindow):
     #  Meeting Tools -- discovery, display, and execution
     # ------------------------------------------------------------------
 
+    def _adjust_window_for_section(self, widget: QWidget, expanding: bool):
+        """Grow or shrink the window to accommodate a collapsible section.
+
+        When *expanding*, the window height increases by the widget's
+        sizeHint (capped so the window never exceeds 90 % of the available
+        screen height).  When *collapsing*, it shrinks by the widget's
+        current height.
+        """
+        if self._compact_mode:
+            return  # don't resize while in compact view
+        
+        delta = widget.sizeHint().height() if expanding else widget.height()
+        if delta <= 0:
+            return
+        
+        screen = self.screen()
+        max_height = int(screen.availableGeometry().height() * 0.9) if screen else 900
+        
+        geo = self.geometry()
+        if expanding:
+            new_h = min(geo.height() + delta, max_height)
+        else:
+            new_h = max(geo.height() - delta, self.minimumHeight())
+        
+        geo.setHeight(new_h)
+        self.setGeometry(geo)
+
     def _toggle_tool_params(self):
         """Toggle visibility of the parameters table."""
         visible = not self.tool_params_table.isVisible()
+        self._adjust_window_for_section(self.tool_params_table, expanding=visible)
         self.tool_params_table.setVisible(visible)
         self.tool_params_toggle.setText(
             "▼ Parameters" if visible else "▶ Parameters"
@@ -1644,6 +1798,7 @@ class TranscriptRecorderApp(QMainWindow):
     def _toggle_tool_data_files(self):
         """Toggle visibility of the data files section."""
         visible = not self.tool_data_files_widget.isVisible()
+        self._adjust_window_for_section(self.tool_data_files_widget, expanding=visible)
         self.tool_data_files_widget.setVisible(visible)
         self.tool_data_files_toggle.setText(
             "▼ Data Files" if visible else "▶ Data Files"
@@ -2342,7 +2497,7 @@ class TranscriptRecorderApp(QMainWindow):
     
     def _clear_log_file(self):
         """Clear the log file."""
-        if current_log_file_path is None:
+        if _constants.current_log_file_path is None:
             QMessageBox.information(self, "Logging Disabled", "File logging is disabled in configuration.")
             return
             
@@ -2354,8 +2509,8 @@ class TranscriptRecorderApp(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                if current_log_file_path.exists():
-                    with open(current_log_file_path, 'w', encoding='utf-8') as f:
+                if _constants.current_log_file_path.exists():
+                    with open(_constants.current_log_file_path, 'w', encoding='utf-8') as f:
                         f.write("")
                     logger.info("Maintenance: log file cleared")
                     self.statusBar().showMessage("Log file cleared")
