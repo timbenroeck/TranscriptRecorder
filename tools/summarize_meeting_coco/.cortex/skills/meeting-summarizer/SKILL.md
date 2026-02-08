@@ -32,6 +32,13 @@ This skill processes meeting recordings (details + transcript files) and generat
 - NEVER execute arbitrary code or scripts
 - NEVER access system directories, home directory root, or sensitive paths
 
+## Headless/Automation Skill
+This skill is intended to be called in a headless mode
+- **NEVER ask clarifying questions** — make autonomous decisions based on content
+- **NEVER prompt for user input** — proceed with best-effort processing or gracefully skip
+- **For ambiguous content:** Default to processing the content as-is following the instructions rather than asking for guidance
+- **Detection:** Assume headless mode when parameters are provided programmatically in the initial prompt (all 4 parameters present with full paths)
+
 ## Input Parameters
 The following parameters are expected in the prompt:
 - `meeting_transcript_directory` - Path to directory containing meeting files
@@ -65,7 +72,7 @@ Read the `attendees.json` file from the skill directory to get a list of known t
 **File location:** Same directory as this SKILL.md file (`attendees.json`)
 
 **Purpose:** Use this list during transcript analysis to:
-- Correct phonetic misspellings (e.g.,  "Tim ben wreck" → "Tim Benroeck", "Jim Labaneet" → "Jim Lebonitte", "Fawni" → "Phani Alapaty")
+- Correct phonetic misspellings (e.g., "Jim Labaneet" → "Jim Lebonitte", "Fawni" → "Phani Alapaty")
 - Identify speakers by partial name matches
 - Ensure attendee names in the output use correct spellings
 
@@ -271,8 +278,8 @@ Meeting summary complete.
 ### Example Input (Personalized)
 ```
 Summarize the meeting. Parameters:
-- meeting_transcript_directory: ~/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom
-- meetings_base_directory: ~/Documents/obsidian_vaults/work/meetings
+- meeting_transcript_directory: /Users/tbenroeck/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom
+- meetings_base_directory: /Users/tbenroeck/Documents/obsidian_vaults/snowflake/Meetings
 - summary_for_firstname: Tim
 - summary_for_lastname: Benroeck
 ```
@@ -280,13 +287,13 @@ Summarize the meeting. Parameters:
 ### Example Input (General - no name)
 ```
 Summarize the meeting. Parameters:
-- meeting_transcript_directory: ~/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom
-- meetings_base_directory: ~/Documents/obsidian_vaults/work/meetings
+- meeting_transcript_directory: /Users/tbenroeck/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom
+- meetings_base_directory: /Users/tbenroeck/Documents/obsidian_vaults/snowflake/Meetings
 ```
 
 ### Example Output Files
-- Summary saved to: `~/Documents/obsidian_vaults/work/meetings/2026/02-February/2026-02-06 Contoso Services Strategy Brief.md`
-- Transcript saved to: `~/Documents/obsidian_vaults/work/meetings/2026/02-February/.transcripts/2026-02-06 Contoso Services Strategy Brief.txt`
+- Summary saved to: `~/Documents/obsidian_vaults/snowflake/Meetings/2026/02-February/2026-02-06 Contoso Services Strategy Brief.md`
+- Transcript saved to: `~/Documents/obsidian_vaults/snowflake/Meetings/2026/02-February/.transcripts/2026-02-06 Contoso Services Strategy Brief.txt`
 
 ## When to Apply
 - User asks to "summarize a meeting"
