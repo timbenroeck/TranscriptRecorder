@@ -1,7 +1,11 @@
 {
   "display_name": "Summarize Meeting",
   "description": "Generate an AI-powered meeting summary using Cortex. Requires meeting_details.txt and meeting_transcript.txt in the recording directory.",
-  "script": "summarize_meeting.sh",
+  "script": "summarize_meeting_coco.sh",
+  "streaming": true,
+  "stream_parser": "cortex_json",
+  "idle_warning_seconds": 120,
+  "idle_kill_seconds": 300,
   "parameters": [
     {
       "flag": "-m",
@@ -12,26 +16,34 @@
     {
       "flag": "-o",
       "label": "Output Directory",
-      "default": "~/Documents/obsidian_vault/Meetings",
+      "default": "~/Documents/obsidian_vaults/work/meetings",
       "required": true
     },
     {
       "flag": "-f",
       "label": "First Name",
-      "default": "John",
+      "default": "Tim",
       "required": false
     },
     {
       "flag": "-l",
       "label": "Last Name",
-      "default": "Smith",
+      "default": "Benroeck",
       "required": false
     },
     {
       "flag": "-c",
       "label": "Cortex Connection",
-      "default": "snowflake",
+      "default": "Snowflake",
       "required": false
+    }
+  ],
+  "data_files": [
+    {
+      "file": ".cortex/skills/meeting-summarizer/attendees.json",
+      "label": "Attendees",
+      "description": "List of known attendees for name correction and recognition in meeting summaries.",
+      "editor": "string_list"
     }
   ]
 }

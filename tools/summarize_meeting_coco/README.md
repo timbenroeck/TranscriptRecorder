@@ -5,7 +5,6 @@ Generate an AI-powered meeting summary using Cortex and the meeting-summarizer s
 ## Requirements
 
 * **[Cortex CLI](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-cli)** must be installed and available on your PATH.
-* The `meeting-summarizer` skill must be installed. For more information on how skills work, see **[Understanding Cortex Skills](https://docs.snowflake.com/en/user-guide/cortex-code/extensibility#extensibility-skills)**.
 * A default Snowflake connection configuration must exist, or use the `-c` parameter to specify one.
 
 ## Parameters

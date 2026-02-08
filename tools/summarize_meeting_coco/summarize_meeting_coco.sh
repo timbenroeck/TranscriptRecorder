@@ -7,6 +7,9 @@ FIRST_NAME=""
 LAST_NAME=""
 CORTEX_CONNECTION=""
 
+# Model selection - opus for complex instruction following
+MODEL="claude-opus-4-5"
+
 usage() {
     echo "Usage: $0 -m <meeting_dir> [-o <output_dir>] [-f <first_name>] [-l <last_name>] [-c <cortex_connection>]"
     echo ""
@@ -20,7 +23,7 @@ usage() {
     echo "  -c    Cortex connection name (e.g. snowflake). If omitted, uses the default connection."
     echo ""
     echo "Example:"
-    echo "  $0 -m /Users/tbenroeck/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom -o /path/to/output"
+    echo "  $0 -m ~/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom -o /path/to/output"
     echo "  $0 -m /path/to/meeting -f John -l Smith -o /path/to/output"
     echo "  $0 -m /path/to/meeting -c snowflake -o /path/to/output"
     exit 1
@@ -63,10 +66,10 @@ if [ ! -d "$OUTPUT_DIR" ]; then
     exit 1
 fi
 
-# 1. Start with the base prompt
-PROMPT="Summarize the meeting. Parameters:
+# 1. Start with the base prompt (prefix with $meeting-summarizer to force skill activation)
+PROMPT="Summarize the meeting using the meeting-summarizer skill. Parameters:
 - meeting_transcript_directory: $MEETING_DIR
-- summary_output_directory: $OUTPUT_DIR"
+- meetings_base_directory: $OUTPUT_DIR"
 
 # 2. Conditionally append First Name
 if [ -n "$FIRST_NAME" ]; then
@@ -80,9 +83,24 @@ if [ -n "$LAST_NAME" ]; then
 - summary_for_lastname: $LAST_NAME"
 fi
 
+# Resolve the directory containing this script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Build cortex command with optional connection flag
+# --bypass skips permission prompts for unattended execution
 if [ -n "$CORTEX_CONNECTION" ]; then
-    cortex -c "$CORTEX_CONNECTION" -p "$PROMPT"
+    echo ""
+    echo "============================================"
+    echo "cortex --bypass --output-format stream-json -m $MODEL -c $CORTEX_CONNECTION  -p '$PROMPT'"
+    echo "============================================"
+    echo ""
+    cortex --bypass --output-format stream-json -m "$MODEL" -c "$CORTEX_CONNECTION" -p "$PROMPT"
 else
-    cortex -p "$PROMPT"
+    echo ""
+    echo "============================================"
+    echo "cortex --bypass --output-format stream-json -m $MODEL  -p '$PROMPT'"
+    echo "============================================"
+    echo ""
+    cortex --bypass --output-format stream-json -m "$MODEL" -p "$PROMPT"
 fi

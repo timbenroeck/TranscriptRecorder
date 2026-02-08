@@ -1,0 +1,35 @@
+{
+  "display_name": "Clean Transcript",
+  "description": "First-pass cleanup of meeting transcripts. Backs up the original to .backup/, then overwrites it with a cleaned version. Removes filler words, (Unverified) tags, stuttered words, and applies terminology corrections.",
+  "script": "clean_transcript.py",
+  "streaming": false,
+  "parameters": [
+    {
+      "flag": "-t",
+      "label": "Transcript File",
+      "builtin": "meeting_transcript",
+      "required": true
+    },
+    {
+      "flag": "-c",
+      "label": "Corrections File",
+      "default": "",
+      "required": false
+    },
+    {
+      "flag": "--no-backup",
+      "label": "Skip Backup",
+      "type": "boolean",
+      "default": false,
+      "required": false
+    }
+  ],
+  "data_files": [
+    {
+      "file": "data/corrections.json",
+      "label": "Corrections Dictionary",
+      "description": "Map correct terms to their common mistranscriptions. Key = correct form, Values = comma-separated incorrect variants (matched case-insensitively).",
+      "editor": "key_array_grid"
+    }
+  ]
+}
