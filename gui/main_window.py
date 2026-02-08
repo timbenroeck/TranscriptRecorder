@@ -78,7 +78,10 @@ class TranscriptRecorderApp(QMainWindow):
         self._idle_warning_seconds: int = 30   # overwritten per-tool from tool.json
         self._idle_kill_seconds: int = 120     # overwritten per-tool from tool.json
         self._compact_mode = False  # Track compact/expanded view state
+        self._maximized_view = False  # Track maximize/restore view state
         self._expanded_size = None  # Remember window size before compacting
+        self._default_size = QSize(600, 450)
+        self._maximized_size = QSize(960, 720)
         self._has_accessibility = True  # Assume granted; _check_permissions will update
         
         # Setup UI
@@ -211,11 +214,9 @@ class TranscriptRecorderApp(QMainWindow):
         # Meeting Date/Time
         datetime_layout = QHBoxLayout()
         datetime_layout.setSpacing(4)
-        datetime_label = QLabel("Date/Time:")
-        datetime_label.setFixedWidth(110)
-        datetime_layout.addWidget(datetime_label)
         
         self.meeting_datetime_input = QLineEdit()
+        self.meeting_datetime_input.setPlaceholderText("Date/Time...")
         self.meeting_datetime_input.textChanged.connect(self._on_meeting_details_changed)
         datetime_layout.addWidget(self.meeting_datetime_input, stretch=1)
         
@@ -245,9 +246,6 @@ class TranscriptRecorderApp(QMainWindow):
         # Meeting Name
         name_layout = QHBoxLayout()
         name_layout.setSpacing(4)
-        name_label = QLabel("Meeting Name:")
-        name_label.setFixedWidth(110)
-        name_layout.addWidget(name_label)
         
         self.meeting_name_input = QLineEdit()
         self.meeting_name_input.setPlaceholderText("Enter meeting name...")
@@ -255,10 +253,6 @@ class TranscriptRecorderApp(QMainWindow):
         name_layout.addWidget(self.meeting_name_input)
         
         details_layout.addLayout(name_layout)
-        
-        # Meeting Notes
-        notes_label = QLabel("Meeting Notes:")
-        details_layout.addWidget(notes_label)
         
         # Notes text area with vertical button bar on the right
         details_notes_row = QHBoxLayout()
@@ -590,27 +584,35 @@ class TranscriptRecorderApp(QMainWindow):
         status_hlayout.setContentsMargins(12, 0, 12, 2)  # match main_layout L/R, 2px bottom gap
         status_hlayout.setSpacing(8)
         
-        # --- Left zone: action buttons ---
+        is_dark = self._is_dark_mode()
+        
+        # --- Left zone: compact / expand button ---
         self.compact_btn = QPushButton()
         self.compact_btn.setFixedSize(20, 20)
         self.compact_btn.setToolTip("Compact view")
         self.compact_btn.setIcon(IconManager.get_icon(
-            "chevrons_up", is_dark=self._is_dark_mode(), size=16))
+            "chevrons_up", is_dark=is_dark, size=16))
         self.compact_btn.setFlat(True)
         self.compact_btn.clicked.connect(self._toggle_compact_mode)
         status_hlayout.addWidget(self.compact_btn)
         
-        # --- Centre zone: status message with border ---
+        # --- Centre zone: status message ---
         self._status_msg_label = QLabel("Ready")
         self._status_msg_label.setObjectName("status_msg")
         self._status_msg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_hlayout.addWidget(self._status_msg_label, stretch=1)
         
-        # --- Right zone: version ---
-        self.version_label = QLabel(f"v{APP_VERSION}")
-        self.version_label.setObjectName("secondary_label")
-        status_hlayout.addWidget(self.version_label)
+        # --- Right zone: maximize / restore button ---
+        self.maximize_btn = QPushButton()
+        self.maximize_btn.setFixedSize(20, 20)
+        self.maximize_btn.setToolTip("Maximize window")
+        self.maximize_btn.setIcon(IconManager.get_icon(
+            "maximize", is_dark=is_dark, size=16))
+        self.maximize_btn.setFlat(True)
+        self.maximize_btn.clicked.connect(self._toggle_maximized_view)
+        status_hlayout.addWidget(self.maximize_btn)
         
+        self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(status_container, stretch=1)
         
         # Redirect statusBar().showMessage() to our custom label so the
@@ -663,6 +665,25 @@ class TranscriptRecorderApp(QMainWindow):
             compact_icon = "chevrons_down" if self._compact_mode else "chevrons_up"
             self.compact_btn.setIcon(
                 IconManager.get_icon(compact_icon, is_dark=is_dark, size=16))
+            max_icon = "minimize" if self._maximized_view else "maximize"
+            self.maximize_btn.setIcon(
+                IconManager.get_icon(max_icon, is_dark=is_dark, size=16))
+            
+            # Button bar icons
+            self.save_details_btn.setIcon(
+                IconManager.get_icon("save", is_dark=is_dark, size=16))
+            self.open_folder_btn2.setIcon(
+                IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
+            self.copy_btn.setIcon(
+                IconManager.get_icon("copy", is_dark=is_dark, size=16))
+            self.refresh_transcript_btn.setIcon(
+                IconManager.get_icon("refresh", is_dark=is_dark, size=16))
+            self.open_folder_btn.setIcon(
+                IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
+            self.tool_copy_btn.setIcon(
+                IconManager.get_icon("copy", is_dark=is_dark, size=16))
+            self.tool_download_btn.setIcon(
+                IconManager.get_icon("download", is_dark=is_dark, size=16))
         
         # Force every widget in the app to re-read the new stylesheet
         for widget in app.allWidgets():
@@ -818,12 +839,13 @@ class TranscriptRecorderApp(QMainWindow):
         update_action.triggered.connect(self._check_for_updates)
         maint_menu.addAction(update_action)
         
-        maint_menu.addSeparator()
+        # Help menu
+        help_menu = menubar.addMenu("Help")
         
         about_action = QAction(f"About {APP_NAME}", self)
         about_action.setMenuRole(QAction.MenuRole.AboutRole)
         about_action.triggered.connect(self._show_about)
-        maint_menu.addAction(about_action)
+        help_menu.addAction(about_action)
         
     def _setup_tray(self):
         """Setup system tray icon (optional)."""
@@ -1552,10 +1574,54 @@ class TranscriptRecorderApp(QMainWindow):
         self.auto_capture_btn.style().unpolish(self.auto_capture_btn)
         self.auto_capture_btn.style().polish(self.auto_capture_btn)
     
-    def _toggle_compact_mode(self):
-        """Toggle between compact and expanded window views."""
-        self._compact_mode = not self._compact_mode
+    def _toggle_maximized_view(self):
+        """Toggle between default and maximized window sizes.
+
+        If currently compact, expand first so the user never sees a
+        compact + maximized state.
+        """
         is_dark = self._is_dark_mode()
+        
+        # If compact, expand first before maximizing
+        if self._compact_mode:
+            self._compact_mode = False
+            self.tab_widget.show()
+            self.separator_bottom.show()
+            self.compact_btn.setIcon(IconManager.get_icon(
+                "chevrons_up", is_dark=is_dark, size=16))
+            self.compact_btn.setToolTip("Compact view")
+            self.setMinimumHeight(300)
+        
+        self._maximized_view = not self._maximized_view
+        
+        if self._maximized_view:
+            self.resize(self._maximized_size)
+            self.maximize_btn.setIcon(IconManager.get_icon(
+                "minimize", is_dark=is_dark, size=16))
+            self.maximize_btn.setToolTip("Restore window")
+        else:
+            self.resize(self._default_size)
+            self.maximize_btn.setIcon(IconManager.get_icon(
+                "maximize", is_dark=is_dark, size=16))
+            self.maximize_btn.setToolTip("Maximize window")
+    
+    def _toggle_compact_mode(self):
+        """Toggle between compact and expanded window views.
+
+        If currently maximized, restore to default size first so the user
+        never sees a compact + maximized state.
+        """
+        is_dark = self._is_dark_mode()
+        
+        # If maximized, restore first before compacting
+        if self._maximized_view:
+            self._maximized_view = False
+            self.maximize_btn.setIcon(IconManager.get_icon(
+                "maximize", is_dark=is_dark, size=16))
+            self.maximize_btn.setToolTip("Maximize window")
+            self.resize(self._default_size)
+        
+        self._compact_mode = not self._compact_mode
         
         if self._compact_mode:
             self._expanded_size = self.size()

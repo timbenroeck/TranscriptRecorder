@@ -296,11 +296,6 @@ def get_application_stylesheet(is_dark: bool) -> str:
         QPushButton[class="pink"]:pressed {{
             background-color: #D12549;
         }}
-        QPushButton[class="pink"]:disabled {{
-            background-color: {"#4A2A33" if is_dark else "#F0C4CE"};
-            color: {"#8A5060" if is_dark else "#C08090"};
-            border: none;
-        }}
 
         /* Round Time Buttons — side-by-side beside date/time */
         QPushButton#time_btn {{
