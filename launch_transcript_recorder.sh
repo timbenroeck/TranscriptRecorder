@@ -22,9 +22,9 @@ if [ ! -d "$VENV_DIR" ]; then
   if ! grep -q "alias grecorder=" ~/.zshrc; then
     echo "\n# Added by transcript recorder setup" >> ~/.zshrc
     echo "alias grecorder='$SCRIPT_PATH'" >> ~/.zshrc
-    echo "✅ Alias 'recorder' added to ~/.zshrc. Restart terminal or run 'source ~/.zshrc' to use it."
+    echo "✅ Alias 'grecorder' added to ~/.zshrc. Restart terminal or run 'source ~/.zshrc' to use it."
   else
-    echo "ℹ️ Alias 'recorder' already exists in ~/.zshrc."
+    echo "ℹ️ Alias 'grecorder' already exists in ~/.zshrc."
   fi
 
 else

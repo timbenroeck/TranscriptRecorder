@@ -78,3 +78,7 @@ while true; do
 done
 
 echo ""
+
+
+# Launch error run to see error. 
+# cd /Users/tbenroeck/Documents/code/TranscriptRecorder && source .venv/bin/activate && python gui_app.py 2>&1 | head -50

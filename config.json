@@ -2,12 +2,10 @@
   "logging": {
     "level": "INFO",
     "log_to_file": true,
-    "log_file_name": "tr_client.log"
+    "log_file_name": "gui_client.log"
   },
   "client_settings": {
-    "tui": {
-      "export_directory": "~/Documents/transcriptrecorder"
-    }
+    "export_directory": "~/Documents/TranscriptRecorder"
   },
   "application_settings": {
     "zoom": {
@@ -157,7 +155,7 @@
         "AXCell": "AXDescription"
       },
       "serialization_export_depth": 10,
-      "serialization_save_json": true,
+      "serialization_save_json": false,
       "monitor_interval_seconds": 30
     },
     "slack": {
@@ -188,7 +186,7 @@
         "AXStaticText": "AXValue"
       },
       "serialization_export_depth": 10,
-      "serialization_save_json": true,
+      "serialization_save_json": false,
       "monitor_interval_seconds": 30
     }
   }

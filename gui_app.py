@@ -8,9 +8,12 @@ import asyncio
 import json
 import logging
 import logging.handlers
+import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 import tempfile
 import urllib.request
@@ -31,7 +34,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QFileDialog, QStatusBar, QGroupBox, QSpinBox,
     QSplitter, QFrame, QSizePolicy, QSystemTrayIcon, QMenu,
     QTabWidget, QLineEdit, QStyle, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QCheckBox, QInputDialog
+    QHeaderView, QAbstractItemView, QCheckBox, QInputDialog, QDialog
 )
 
 from transcript_recorder import TranscriptRecorder, AXIsProcessTrusted
@@ -48,10 +51,11 @@ except ImportError:
 # --- Configuration Constants ---
 APP_NAME = "Transcript Recorder"
 APP_VERSION = __version__
-DEFAULT_CONFIG_DIR = Path.home() / "Documents" / "transcriptrecorder"
-DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.json"
-DEFAULT_LOG_DIR = DEFAULT_CONFIG_DIR / ".logs"
-DEFAULT_LOG_FILE = DEFAULT_LOG_DIR / "tr_gui_client.log"
+APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "TranscriptRecorder"
+CONFIG_PATH = APP_SUPPORT_DIR / "config.json"
+LOG_DIR = APP_SUPPORT_DIR / ".logs"
+DEFAULT_EXPORT_DIR = Path.home() / "Documents" / "TranscriptRecorder"
+OLD_CONFIG_DIR = Path.home() / "Documents" / "transcriptrecorder"  # migration detection
 
 # --- Logging Setup ---
 LOG_LEVELS = {
@@ -94,8 +98,8 @@ def setup_logging(config: Optional[Dict] = None):
     # File handler (rotating: 2 MB max, keep 3 backups)
     if log_to_file:
         try:
-            DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
-            current_log_file_path = DEFAULT_LOG_DIR / log_file_name
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            current_log_file_path = LOG_DIR / log_file_name
             file_handler = logging.handlers.RotatingFileHandler(
                 current_log_file_path,
                 maxBytes=2 * 1024 * 1024,  # 2 MB
@@ -529,6 +533,157 @@ class LogViewerDialog(QMainWindow):
                 QMessageBox.warning(self, "Error", f"Failed to clear log file: {e}")
 
 
+class SetupDialog(QDialog):
+    """First-run setup dialog shown when no configuration file exists."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} — First-Run Setup")
+        self.setMinimumWidth(500)
+        self.setModal(True)
+        
+        self._chosen_config_path: Optional[Path] = None  # set on success
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        
+        # Header
+        header = QLabel(f"Welcome to {APP_NAME}")
+        header.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(header)
+        
+        desc = QLabel(
+            "Choose how to get started. You can always change the export\n"
+            "directory later from the Settings menu."
+        )
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        
+        layout.addSpacing(8)
+        
+        # Option 1 — new setup
+        new_group = QGroupBox("Option A: Set up a new export directory")
+        new_layout = QVBoxLayout(new_group)
+        new_desc = QLabel(
+            "Pick a folder where recordings, tools, and transcripts will be saved.\n"
+            "A default configuration will be created for you."
+        )
+        new_desc.setWordWrap(True)
+        new_layout.addWidget(new_desc)
+        new_btn = QPushButton("Choose Export Directory…")
+        new_btn.clicked.connect(self._setup_new)
+        new_layout.addWidget(new_btn)
+        layout.addWidget(new_group)
+        
+        # Option 2 — import existing config
+        import_group = QGroupBox("Option B: Import an existing configuration")
+        import_layout = QVBoxLayout(import_group)
+        import_desc = QLabel(
+            "Select an existing config.json file (e.g. from a shared drive or backup).\n"
+            "It will be copied to the application's settings folder."
+        )
+        import_desc.setWordWrap(True)
+        import_layout.addWidget(import_desc)
+        import_btn = QPushButton("Select config.json…")
+        import_btn.clicked.connect(self._import_existing)
+        import_layout.addWidget(import_btn)
+        layout.addWidget(import_group)
+        
+        layout.addStretch()
+        
+        # Cancel
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+    
+    def _setup_new(self):
+        """Let the user pick an export directory and create a fresh config."""
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Export Directory",
+            str(DEFAULT_EXPORT_DIR),
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if not chosen_dir:
+            return
+        
+        export_path = Path(chosen_dir)
+        
+        # Copy bundled config to App Support, updating export_directory
+        bundled_config = resource_path("config.json")
+        if not bundled_config.exists():
+            QMessageBox.critical(
+                self, "Error",
+                "Could not find the bundled configuration file.\n"
+                "Please reinstall the application."
+            )
+            return
+        
+        try:
+            APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+            
+            with open(bundled_config, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            # Set the export directory to user's choice
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["export_directory"] = str(export_path)
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            # Create the export directory and tools sub-directory
+            export_path.mkdir(parents=True, exist_ok=True)
+            (export_path / "tools").mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Setup: created config at {CONFIG_PATH}, export dir={export_path}")
+            self.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Setup Error", f"Failed to create configuration:\n{e}")
+    
+    def _import_existing(self):
+        """Let the user pick an existing config.json and copy it to App Support."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Configuration File",
+            str(Path.home()),
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if not file_path:
+            return
+        
+        src = Path(file_path)
+        
+        try:
+            # Validate it's valid JSON
+            with open(src, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            logger.info(f"Setup: imported config from {src} to {CONFIG_PATH}")
+            self.accept()
+            
+        except json.JSONDecodeError as e:
+            QMessageBox.critical(
+                self, "Invalid File",
+                f"The selected file is not valid JSON:\n{e}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", f"Failed to import configuration:\n{e}")
+
+
 class ConfigEditorDialog(QMainWindow):
     """A window for viewing and editing the configuration file."""
     
@@ -548,7 +703,7 @@ class ConfigEditorDialog(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         
         # Info label
-        info_label = QLabel(f"Editing: {DEFAULT_CONFIG_PATH}")
+        info_label = QLabel(f"Editing: {CONFIG_PATH}")
         info_label.setObjectName("secondary_label")
         layout.addWidget(info_label)
         
@@ -607,8 +762,8 @@ class ConfigEditorDialog(QMainWindow):
     def _load_config(self):
         """Load config file contents."""
         try:
-            if DEFAULT_CONFIG_PATH.exists():
-                with open(DEFAULT_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            if CONFIG_PATH.exists():
+                with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                     content = f.read()
                 self.config_text.setPlainText(content)
                 self._is_modified = False
@@ -649,14 +804,14 @@ class ConfigEditorDialog(QMainWindow):
             config_data = json.loads(self.config_text.toPlainText())
             formatted = json.dumps(config_data, indent=2)
             
-            with open(DEFAULT_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 f.write(formatted)
             
             self.config_text.setPlainText(formatted)
             self._is_modified = False
             self.status_label.setText("✓ Configuration saved")
             self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
-            logger.info(f"Config editor: saved to {DEFAULT_CONFIG_PATH}")
+            logger.info(f"Config editor: saved to {CONFIG_PATH}")
             self.config_saved.emit()
             
         except Exception as e:
@@ -850,7 +1005,8 @@ class ToolRunnerWorker(QThread):
     """Background worker for executing tool scripts without blocking the UI.
     
     Uses ``subprocess.Popen`` so the process can be cancelled mid-run via
-    ``cancel()``.
+    ``cancel()``.  The child is spawned in its own session/process-group so
+    that ``cancel()`` can tear down the entire tree (bash + cortex, etc.).
     """
     
     output_ready = pyqtSignal(str, str, int)  # stdout, stderr, exit_code
@@ -862,33 +1018,319 @@ class ToolRunnerWorker(QThread):
         self._process: Optional[subprocess.Popen] = None
         self._cancelled = False
     
-    def run(self):
+    @staticmethod
+    def _get_user_env() -> dict:
+        """Return an environment dict with the user's full login-shell PATH.
+        
+        GUI applications on macOS inherit a minimal system PATH that often
+        lacks user-specific directories (e.g. ``~/.local/bin``).  This method
+        spawns a one-shot login shell to capture the real PATH and merges it
+        into the current process environment.
+        """
+        env = os.environ.copy()
         try:
+            shell = os.environ.get("SHELL", "/bin/zsh")
+            logger.debug(f"ToolRunnerWorker._get_user_env: resolving PATH via login shell: {shell}")
+            result = subprocess.run(
+                [shell, "-l", "-c", "echo $PATH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                env["PATH"] = result.stdout.strip()
+                logger.debug(f"ToolRunnerWorker._get_user_env: resolved PATH ({len(env['PATH'])} chars)")
+            else:
+                logger.warning(f"ToolRunnerWorker._get_user_env: login shell returned "
+                               f"rc={result.returncode}, stdout empty={not result.stdout.strip()}")
+        except subprocess.TimeoutExpired:
+            logger.warning("ToolRunnerWorker._get_user_env: login shell timed out after 5s")
+        except Exception as exc:
+            logger.warning(f"ToolRunnerWorker._get_user_env: failed to resolve user PATH: {exc}")
+        return env
+    
+    def run(self):
+        logger.debug(f"ToolRunnerWorker.run: starting — command={self.command}, cwd={self.cwd}")
+        try:
+            env = self._get_user_env()
             self._process = subprocess.Popen(
                 self.command,
+                stdin=subprocess.DEVNULL,   # close stdin so child exits cleanly
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=self.cwd,
+                env=env,
+                start_new_session=True,  # own process group for clean cancel
             )
+            pid = self._process.pid
+            logger.info(f"ToolRunnerWorker.run: spawned pid={pid}")
+            
             stdout, stderr = self._process.communicate()
+            rc = self._process.returncode
+            logger.debug(f"ToolRunnerWorker.run: communicate() returned — "
+                         f"pid={pid}, rc={rc}, cancelled={self._cancelled}, "
+                         f"stdout_len={len(stdout or '')}, stderr_len={len(stderr or '')}")
             
             if self._cancelled:
                 self.output_ready.emit(stdout or "", "Cancelled by user.", -2)
             else:
-                self.output_ready.emit(stdout or "", stderr or "", self._process.returncode)
+                self.output_ready.emit(stdout or "", stderr or "", rc)
         except Exception as e:
+            logger.error(f"ToolRunnerWorker.run: exception — {type(e).__name__}: {e}", exc_info=True)
             if self._cancelled:
                 self.output_ready.emit("", "Cancelled by user.", -2)
             else:
                 self.output_ready.emit("", f"Error running tool: {e}", -1)
     
     def cancel(self):
-        """Kill the running subprocess."""
+        """Kill the running subprocess and its entire process group."""
         self._cancelled = True
-        if self._process and self._process.poll() is None:
-            self._process.kill()
-            logger.info("Tools: process killed by user")
+        proc = self._process
+        if proc is None:
+            logger.warning("ToolRunnerWorker.cancel: no process to cancel")
+            return
+        
+        pid = proc.pid
+        poll = proc.poll()
+        if poll is not None:
+            logger.info(f"ToolRunnerWorker.cancel: process already exited (pid={pid}, rc={poll})")
+            return
+        
+        # Kill the whole process group (bash + cortex + any children)
+        try:
+            pgid = os.getpgid(pid)
+            logger.info(f"ToolRunnerWorker.cancel: sending SIGTERM to process group "
+                        f"pgid={pgid} (pid={pid})")
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            logger.info(f"ToolRunnerWorker.cancel: process group already gone (pid={pid})")
+            return
+        except Exception as exc:
+            logger.warning(f"ToolRunnerWorker.cancel: SIGTERM to pgid failed: {exc}, "
+                           f"falling back to proc.kill()")
+            proc.kill()
+            return
+        
+        # Give the group a moment to exit gracefully, then force-kill
+        try:
+            proc.wait(timeout=3)
+            logger.info(f"ToolRunnerWorker.cancel: process exited after SIGTERM (pid={pid})")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"ToolRunnerWorker.cancel: SIGTERM timed out, sending SIGKILL "
+                           f"to pgid={pgid}")
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                logger.error(f"ToolRunnerWorker.cancel: SIGKILL failed: {exc}")
+            logger.info(f"ToolRunnerWorker.cancel: SIGKILL sent (pid={pid})")
+
+
+# ---------------------------------------------------------------------------
+# Stream parsers — each is a callable: (raw_line: str) -> Optional[str]
+# ---------------------------------------------------------------------------
+
+def _stream_parser_raw(raw_line: str) -> Optional[str]:
+    """Pass every line through as-is."""
+    return raw_line.rstrip("\n")
+
+
+def _stream_parser_cortex_json(raw_line: str) -> Optional[str]:
+    """Parse cortex ``--output-format stream-json`` lines into human-readable status."""
+    line = raw_line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return line  # fall back to raw
+
+    msg = obj.get("message", {})
+    content_list = msg.get("content", [])
+
+    parts: List[str] = []
+    for block in content_list:
+        block_type = block.get("type", "")
+        if block_type == "text":
+            text = block.get("text", "").strip()
+            if text:
+                parts.append(text)
+        elif block_type == "thinking":
+            thinking = block.get("thinking", "").strip()
+            if thinking:
+                # Show first 120 chars of thinking to keep it brief
+                preview = thinking[:120] + ("..." if len(thinking) > 120 else "")
+                parts.append(f"[Thinking] {preview}")
+        elif block_type == "tool_use":
+            name = block.get("name", "unknown")
+            tool_input = block.get("input", {})
+            if name == "read":
+                path = tool_input.get("file_path", "")
+                parts.append(f"[Reading] {path}")
+            elif name == "write":
+                path = tool_input.get("file_path", "")
+                parts.append(f"[Writing] {path}")
+            elif name in ("bash", "shell"):
+                cmd = tool_input.get("command", tool_input.get("description", ""))
+                parts.append(f"[Running] {cmd}")
+            elif name == "skill":
+                skill_cmd = tool_input.get("command", "")
+                parts.append(f"[Skill] {skill_cmd}")
+            else:
+                parts.append(f"[Tool: {name}]")
+        elif block_type == "tool_result":
+            # Tool results can be very long; show a brief summary
+            content = block.get("content", "")
+            if isinstance(content, str):
+                preview = content[:200] + ("..." if len(content) > 200 else "")
+                parts.append(f"  result: {preview}")
+    
+    if parts:
+        return "\n".join(parts)
+    return None
+
+
+STREAM_PARSERS = {
+    "raw": _stream_parser_raw,
+    "cortex_json": _stream_parser_cortex_json,
+}
+
+
+class StreamingToolRunnerWorker(QThread):
+    """Background worker that reads stdout line-by-line for real-time output.
+    
+    Emits ``output_line`` for each parsed line so the UI can display progress
+    incrementally.  Also emits ``output_ready`` on completion for compatibility
+    with ``_on_tool_finished``.
+    """
+    
+    output_line = pyqtSignal(str)               # each parsed line (real-time)
+    output_ready = pyqtSignal(str, str, int)     # full stdout, stderr, exit_code
+    
+    def __init__(self, command: List[str], cwd: str = None,
+                 parser_fn=None, parent=None):
+        super().__init__(parent)
+        self.command = command
+        self.cwd = cwd
+        self._parser_fn = parser_fn or _stream_parser_raw
+        self._process: Optional[subprocess.Popen] = None
+        self._cancelled = False
+        self._last_output_time = time.time()
+    
+    @property
+    def last_output_time(self) -> float:
+        """Timestamp of the most recent stdout line (thread-safe read)."""
+        return self._last_output_time
+    
+    def run(self):
+        logger.debug(f"StreamingToolRunnerWorker.run: starting — "
+                     f"command={self.command}, cwd={self.cwd}")
+        try:
+            env = ToolRunnerWorker._get_user_env()
+            self._process = subprocess.Popen(
+                self.command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=self.cwd,
+                env=env,
+                start_new_session=True,
+            )
+            pid = self._process.pid
+            self._last_output_time = time.time()
+            logger.info(f"StreamingToolRunnerWorker.run: spawned pid={pid}")
+            
+            # Read stderr in a daemon thread to avoid pipe deadlock
+            stderr_lines: List[str] = []
+            
+            def _read_stderr():
+                try:
+                    for err_line in self._process.stderr:
+                        stderr_lines.append(err_line)
+                except Exception:
+                    pass
+            
+            stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+            stderr_thread.start()
+            
+            # Read stdout line-by-line, emitting parsed output in real-time
+            stdout_lines: List[str] = []
+            for line in self._process.stdout:
+                stdout_lines.append(line)
+                self._last_output_time = time.time()
+                try:
+                    parsed = self._parser_fn(line)
+                    if parsed is not None:
+                        self.output_line.emit(parsed)
+                except Exception as exc:
+                    logger.debug(f"StreamingToolRunnerWorker: parser error: {exc}")
+                    self.output_line.emit(line.rstrip("\n"))
+            
+            # stdout EOF — wait for process and stderr thread
+            self._process.wait()
+            stderr_thread.join(timeout=5)
+            
+            rc = self._process.returncode
+            stdout_full = "".join(stdout_lines)
+            stderr_full = "".join(stderr_lines)
+            
+            logger.debug(f"StreamingToolRunnerWorker.run: finished — "
+                         f"pid={pid}, rc={rc}, cancelled={self._cancelled}, "
+                         f"stdout_lines={len(stdout_lines)}, stderr_lines={len(stderr_lines)}")
+            
+            if self._cancelled:
+                self.output_ready.emit(stdout_full, "Cancelled by user.", -2)
+            else:
+                self.output_ready.emit(stdout_full, stderr_full, rc)
+        except Exception as e:
+            logger.error(f"StreamingToolRunnerWorker.run: exception — "
+                         f"{type(e).__name__}: {e}", exc_info=True)
+            if self._cancelled:
+                self.output_ready.emit("", "Cancelled by user.", -2)
+            else:
+                self.output_ready.emit("", f"Error running tool: {e}", -1)
+    
+    def cancel(self):
+        """Kill the running subprocess and its entire process group."""
+        self._cancelled = True
+        proc = self._process
+        if proc is None:
+            logger.warning("StreamingToolRunnerWorker.cancel: no process to cancel")
+            return
+        
+        pid = proc.pid
+        poll = proc.poll()
+        if poll is not None:
+            logger.info(f"StreamingToolRunnerWorker.cancel: process already exited "
+                        f"(pid={pid}, rc={poll})")
+            return
+        
+        try:
+            pgid = os.getpgid(pid)
+            logger.info(f"StreamingToolRunnerWorker.cancel: sending SIGTERM to pgid={pgid}")
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            logger.info(f"StreamingToolRunnerWorker.cancel: process group already gone")
+            return
+        except Exception as exc:
+            logger.warning(f"StreamingToolRunnerWorker.cancel: SIGTERM failed: {exc}, "
+                           f"falling back to proc.kill()")
+            proc.kill()
+            return
+        
+        try:
+            proc.wait(timeout=3)
+            logger.info(f"StreamingToolRunnerWorker.cancel: process exited after SIGTERM")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"StreamingToolRunnerWorker.cancel: SIGTERM timed out, "
+                           f"sending SIGKILL to pgid={pgid}")
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                logger.error(f"StreamingToolRunnerWorker.cancel: SIGKILL failed: {exc}")
 
 
 class UpdateCheckWorker(QThread):
@@ -1524,6 +1966,513 @@ class ToolJsonEditorDialog(QMainWindow):
         event.accept()
 
 
+# ── Data File Editor Widgets ─────────────────────────────────────────────────
+# Reusable editor widgets for structured JSON data files that tools declare
+# in their tool.json via the "data_files" array.
+
+
+class BaseDataEditor(QWidget):
+    """Abstract base for structured data editors."""
+    modified = pyqtSignal()
+
+    def __init__(self, file_path: Path, parent=None):
+        super().__init__(parent)
+        self._file_path = file_path
+        self._is_modified = False
+
+    def load(self):
+        raise NotImplementedError
+
+    def save(self) -> bool:
+        raise NotImplementedError
+
+    def is_modified(self) -> bool:
+        return self._is_modified
+
+
+class KeyArrayGridEditor(BaseDataEditor):
+    """Editor for ``{ "Key": ["val1", "val2", ...] }`` JSON files.
+
+    Renders a two-column datagrid where the first column is the key (correct
+    term) and the second column shows the array values as a comma-separated
+    string.  Both columns are editable inline.
+    """
+
+    def __init__(self, file_path: Path, key_label: str = "Key",
+                 values_label: str = "Values (comma-separated)", parent=None):
+        super().__init__(file_path, parent)
+        self._key_label = key_label
+        self._values_label = values_label
+        self._loading = False  # guard against cellChanged during load
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Table
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels([self._key_label, self._values_label])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.table)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add Row")
+        add_btn.clicked.connect(self._add_row)
+        btn_layout.addWidget(add_btn)
+
+        delete_btn = QPushButton("- Delete Row")
+        delete_btn.clicked.connect(self._delete_row)
+        btn_layout.addWidget(delete_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.load()
+
+    def load(self):
+        self._loading = True
+        self.table.setRowCount(0)
+        try:
+            if self._file_path.exists():
+                with open(self._file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for key in sorted(data.keys()):
+                    values = data[key]
+                    row = self.table.rowCount()
+                    self.table.insertRow(row)
+                    self.table.setItem(row, 0, QTableWidgetItem(key))
+                    vals_str = ", ".join(str(v) for v in values) if isinstance(values, list) else str(values)
+                    self.table.setItem(row, 1, QTableWidgetItem(vals_str))
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to load {self._file_path}: {e}")
+        self._is_modified = False
+        self._loading = False
+
+    def save(self) -> bool:
+        data = {}
+        for row in range(self.table.rowCount()):
+            key_item = self.table.item(row, 0)
+            vals_item = self.table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            vals_str = vals_item.text().strip() if vals_item else ""
+            if not key:
+                continue
+            values = [v.strip() for v in vals_str.split(",") if v.strip()]
+            data[key] = values
+        try:
+            with open(self._file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+            self._is_modified = False
+            return True
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to save {self._file_path}: {e}")
+            return False
+
+    def _on_cell_changed(self, row: int, col: int):
+        if not self._loading:
+            self._is_modified = True
+            self.modified.emit()
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.setItem(row, 1, QTableWidgetItem(""))
+        self.table.editItem(self.table.item(row, 0))
+        self._is_modified = True
+        self.modified.emit()
+
+    def _delete_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        key_item = self.table.item(row, 0)
+        key_text = key_item.text() if key_item else "(empty)"
+        reply = QMessageBox.question(
+            self, "Delete Row",
+            f"Delete row \"{key_text}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table.removeRow(row)
+            self._is_modified = True
+            self.modified.emit()
+
+
+class KeyValueGridEditor(BaseDataEditor):
+    """Editor for ``{ "key": "value" }`` JSON files.
+
+    Renders a two-column datagrid with Key and Value, both editable inline.
+    """
+
+    def __init__(self, file_path: Path, key_label: str = "Key",
+                 value_label: str = "Value", parent=None):
+        super().__init__(file_path, parent)
+        self._key_label = key_label
+        self._value_label = value_label
+        self._loading = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels([self._key_label, self._value_label])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.table)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add Row")
+        add_btn.clicked.connect(self._add_row)
+        btn_layout.addWidget(add_btn)
+
+        delete_btn = QPushButton("- Delete Row")
+        delete_btn.clicked.connect(self._delete_row)
+        btn_layout.addWidget(delete_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.load()
+
+    def load(self):
+        self._loading = True
+        self.table.setRowCount(0)
+        try:
+            if self._file_path.exists():
+                with open(self._file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for key in sorted(data.keys()):
+                    row = self.table.rowCount()
+                    self.table.insertRow(row)
+                    self.table.setItem(row, 0, QTableWidgetItem(str(key)))
+                    self.table.setItem(row, 1, QTableWidgetItem(str(data[key])))
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to load {self._file_path}: {e}")
+        self._is_modified = False
+        self._loading = False
+
+    def save(self) -> bool:
+        data = {}
+        for row in range(self.table.rowCount()):
+            key_item = self.table.item(row, 0)
+            val_item = self.table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            val = val_item.text().strip() if val_item else ""
+            if not key:
+                continue
+            data[key] = val
+        try:
+            with open(self._file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+            self._is_modified = False
+            return True
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to save {self._file_path}: {e}")
+            return False
+
+    def _on_cell_changed(self, row: int, col: int):
+        if not self._loading:
+            self._is_modified = True
+            self.modified.emit()
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.setItem(row, 1, QTableWidgetItem(""))
+        self.table.editItem(self.table.item(row, 0))
+        self._is_modified = True
+        self.modified.emit()
+
+    def _delete_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        key_item = self.table.item(row, 0)
+        key_text = key_item.text() if key_item else "(empty)"
+        reply = QMessageBox.question(
+            self, "Delete Row",
+            f"Delete row \"{key_text}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table.removeRow(row)
+            self._is_modified = True
+            self.modified.emit()
+
+
+class StringListEditor(BaseDataEditor):
+    """Editor for ``["item1", "item2", ...]`` JSON arrays.
+
+    Renders a single-column list with Add / Delete / Move-up / Move-down
+    controls.
+    """
+
+    def __init__(self, file_path: Path, item_label: str = "Value", parent=None):
+        super().__init__(file_path, parent)
+        self._item_label = item_label
+        self._loading = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = QTableWidget(0, 1)
+        self.table.setHorizontalHeaderLabels([self._item_label])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.table)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+
+        add_btn = QPushButton("+ Add")
+        add_btn.clicked.connect(self._add_row)
+        btn_layout.addWidget(add_btn)
+
+        delete_btn = QPushButton("- Delete")
+        delete_btn.clicked.connect(self._delete_row)
+        btn_layout.addWidget(delete_btn)
+
+        up_btn = QPushButton("Move Up")
+        up_btn.clicked.connect(self._move_up)
+        btn_layout.addWidget(up_btn)
+
+        down_btn = QPushButton("Move Down")
+        down_btn.clicked.connect(self._move_down)
+        btn_layout.addWidget(down_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.load()
+
+    def load(self):
+        self._loading = True
+        self.table.setRowCount(0)
+        try:
+            if self._file_path.exists():
+                with open(self._file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    for item in data:
+                        row = self.table.rowCount()
+                        self.table.insertRow(row)
+                        self.table.setItem(row, 0, QTableWidgetItem(str(item)))
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to load {self._file_path}: {e}")
+        self._is_modified = False
+        self._loading = False
+
+    def save(self) -> bool:
+        data = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            val = item.text().strip() if item else ""
+            if val:
+                data.append(val)
+        try:
+            with open(self._file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+            self._is_modified = False
+            return True
+        except Exception as e:
+            logger.error(f"DataFileEditor: failed to save {self._file_path}: {e}")
+            return False
+
+    def _on_cell_changed(self, row: int, col: int):
+        if not self._loading:
+            self._is_modified = True
+            self.modified.emit()
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.editItem(self.table.item(row, 0))
+        self._is_modified = True
+        self.modified.emit()
+
+    def _delete_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        item = self.table.item(row, 0)
+        text = item.text() if item else "(empty)"
+        reply = QMessageBox.question(
+            self, "Delete Item",
+            f"Delete \"{text}\"?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.table.removeRow(row)
+            self._is_modified = True
+            self.modified.emit()
+
+    def _move_up(self):
+        row = self.table.currentRow()
+        if row <= 0:
+            return
+        self._swap_rows(row, row - 1)
+        self.table.setCurrentCell(row - 1, 0)
+
+    def _move_down(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= self.table.rowCount() - 1:
+            return
+        self._swap_rows(row, row + 1)
+        self.table.setCurrentCell(row + 1, 0)
+
+    def _swap_rows(self, a: int, b: int):
+        self._loading = True
+        item_a = self.table.item(a, 0)
+        item_b = self.table.item(b, 0)
+        text_a = item_a.text() if item_a else ""
+        text_b = item_b.text() if item_b else ""
+        self.table.item(a, 0).setText(text_b)
+        self.table.item(b, 0).setText(text_a)
+        self._loading = False
+        self._is_modified = True
+        self.modified.emit()
+
+
+# Map of editor type name → editor class
+DATA_FILE_EDITORS = {
+    "key_array_grid": KeyArrayGridEditor,
+    "key_value_grid": KeyValueGridEditor,
+    "string_list": StringListEditor,
+}
+
+
+class DataFileEditorDialog(QMainWindow):
+    """A window for editing a tool's data file using a structured editor.
+
+    Picks the appropriate editor widget based on the ``editor`` type declared
+    in the tool's ``data_files`` entry.
+    """
+
+    data_saved = pyqtSignal()  # Emitted after a successful save
+
+    def __init__(self, file_path: Path, editor_type: str, label: str,
+                 tool_name: str = "", parent=None):
+        super().__init__(parent)
+        self._file_path = file_path
+        self.setWindowTitle(f"{label} — {tool_name}" if tool_name else label)
+        self.setMinimumSize(600, 400)
+        self.resize(700, 500)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # Info label
+        info = QLabel(f"Editing: {file_path}")
+        info.setObjectName("secondary_label")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Create the editor widget
+        editor_cls = DATA_FILE_EDITORS.get(editor_type)
+        if editor_cls:
+            self.editor = editor_cls(file_path)
+        else:
+            logger.warning(f"DataFileEditor: unknown editor type '{editor_type}', "
+                           f"falling back to key_value_grid")
+            self.editor = KeyValueGridEditor(file_path)
+        self.editor.modified.connect(self._on_modified)
+        layout.addWidget(self.editor, stretch=1)
+
+        # Status
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        reload_btn = QPushButton("Reload")
+        reload_btn.clicked.connect(self._reload)
+        btn_layout.addWidget(reload_btn)
+
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        save_btn.setProperty("class", "success")
+        save_btn.clicked.connect(self._save)
+        btn_layout.addWidget(save_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _on_modified(self):
+        self.status_label.setText("")
+
+    def _reload(self):
+        if self.editor.is_modified():
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved changes. Reload and discard them?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+        self.editor.load()
+        self.status_label.setText("Reloaded from disk.")
+        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+
+    def _save(self):
+        if self.editor.save():
+            self.status_label.setText("✓ Saved")
+            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            logger.info(f"DataFileEditor: saved {self._file_path}")
+            self.data_saved.emit()
+        else:
+            self.status_label.setText("✗ Save failed — check the log for details")
+            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+
+    def closeEvent(self, event):
+        if self.editor.is_modified():
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved changes. Close without saving?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+        event.accept()
+
+
 class TranscriptRecorderApp(QMainWindow):
     """Main application window for Transcript Recorder."""
     
@@ -1538,7 +2487,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.current_recording_path: Optional[Path] = None
         self.snapshots_path: Optional[Path] = None  # Hidden .snapshots folder
         self.merged_transcript_path: Optional[Path] = None  # meeting_transcript.txt
-        self.export_base_dir: Path = DEFAULT_CONFIG_DIR
+        self.export_base_dir: Path = DEFAULT_EXPORT_DIR
         self.is_recording = False
         self.snapshot_count = 0
         self._is_capturing = False  # True while a capture+merge is in progress
@@ -1548,10 +2497,14 @@ class TranscriptRecorderApp(QMainWindow):
         self._discovered_tools: Dict[str, dict] = {}  # tool_key → parsed JSON definition
         self._tool_scripts_dir: Optional[Path] = None
         self._tool_runner: Optional[ToolRunnerWorker] = None
+        self._data_file_editors: List[DataFileEditorDialog] = []  # keep refs alive
         self._tool_start_time: float = 0.0  # time.time() when tool started
         self._tool_elapsed_timer: Optional[QTimer] = None  # ticks every second while tool runs
+        self._idle_warning_seconds: int = 30   # overwritten per-tool from tool.json
+        self._idle_kill_seconds: int = 120     # overwritten per-tool from tool.json
         self._compact_mode = False  # Track compact/expanded view state
         self._expanded_size = None  # Remember window size before compacting
+        self._has_accessibility = True  # Assume granted; _check_permissions will update
         
         # Setup UI
         self._setup_window()
@@ -1584,7 +2537,13 @@ class TranscriptRecorderApp(QMainWindow):
         # Try to load app icon
         icon_path = resource_path("transcriber.icns")
         if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+            # On macOS, the app bundle's CFBundleIconFile provides the Dock
+            # icon natively.  Calling setWindowIcon() overrides the native
+            # rendering and strips the system-provided background that macOS
+            # adds behind transparent icons, making the icon hard to see.
+            # Only set the window icon on non-macOS platforms.
+            if sys.platform != "darwin":
+                self.setWindowIcon(QIcon(str(icon_path)))
         
         # macOS specific settings
         if sys.platform == "darwin":
@@ -1894,6 +2853,24 @@ class TranscriptRecorderApp(QMainWindow):
         
         tools_layout.addWidget(self.tool_command_frame)
         
+        # --- Data Files section (collapsible, shown when tool has data_files) ---
+        self.tool_data_files_toggle = QPushButton("▶ Data Files")
+        self.tool_data_files_toggle.setFlat(True)
+        self.tool_data_files_toggle.setStyleSheet(
+            "text-align: left; font-weight: 600; padding: 2px 0;"
+        )
+        self.tool_data_files_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tool_data_files_toggle.setVisible(False)
+        self.tool_data_files_toggle.clicked.connect(self._toggle_tool_data_files)
+        tools_layout.addWidget(self.tool_data_files_toggle)
+        
+        self.tool_data_files_widget = QWidget()
+        self.tool_data_files_layout = QVBoxLayout(self.tool_data_files_widget)
+        self.tool_data_files_layout.setContentsMargins(4, 0, 0, 0)
+        self.tool_data_files_layout.setSpacing(4)
+        self.tool_data_files_widget.setVisible(False)
+        tools_layout.addWidget(self.tool_data_files_widget)
+        
         # Output area (always visible)
         self.tool_output_area = QTextEdit()
         self.tool_output_area.setReadOnly(True)
@@ -1903,6 +2880,12 @@ class TranscriptRecorderApp(QMainWindow):
         )
         self.tool_output_area.setFont(QFont("Menlo", 11))
         tools_layout.addWidget(self.tool_output_area, stretch=1)
+        
+        # Copy button for tool output
+        self.tool_copy_btn = QPushButton("Copy Output")
+        self.tool_copy_btn.setToolTip("Copy tool output to clipboard")
+        self.tool_copy_btn.clicked.connect(self._copy_tool_output)
+        tools_layout.addWidget(self.tool_copy_btn)
         
         self.tab_widget.addTab(tools_tab, "Meeting Tools")
         
@@ -2086,6 +3069,10 @@ class TranscriptRecorderApp(QMainWindow):
         edit_tool_config_action.triggered.connect(self._show_tool_json_editor)
         tools_menu.addAction(edit_tool_config_action)
         
+        edit_data_files_action = QAction("Edit Tool Data Files...", self)
+        edit_data_files_action.triggered.connect(self._show_tool_data_file_picker)
+        tools_menu.addAction(edit_data_files_action)
+        
         tools_menu.addSeparator()
         
         open_tools_folder_action = QAction("Open Tools Folder", self)
@@ -2107,6 +3094,10 @@ class TranscriptRecorderApp(QMainWindow):
         reload_config_action = QAction("Reload Configuration", self)
         reload_config_action.triggered.connect(self._reload_configuration)
         maint_menu.addAction(reload_config_action)
+        
+        change_export_action = QAction("Change Export Directory…", self)
+        change_export_action.triggered.connect(self._change_export_directory)
+        maint_menu.addAction(change_export_action)
         
         maint_menu.addSeparator()
         
@@ -2163,33 +3154,63 @@ class TranscriptRecorderApp(QMainWindow):
         self.tray_icon.show()
         
     def _load_config(self):
-        """Load application configuration."""
-        config_path = DEFAULT_CONFIG_PATH
-        config_dir = config_path.parent
+        """Load application configuration.
         
+        Resolution order:
+        1. CONFIG_PATH in ~/Library/Application Support/TranscriptRecorder/
+        2. Migrate from OLD_CONFIG_DIR (~/Documents/transcriptrecorder/)
+        3. Show first-run SetupDialog
+        """
         try:
-            config_dir.mkdir(parents=True, exist_ok=True)
+            APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
             
-            if not config_path.exists():
-                # Copy bundled config
-                bundled_config = resource_path("config.json")
-                if bundled_config.exists():
-                    shutil.copy(bundled_config, config_path)
-                    logger.info(f"Config: copied bundled config to {config_path}")
-                else:
-                    logger.error("Config: bundled config not found; cannot initialize")
-                    QMessageBox.critical(
-                        self, "Configuration Error",
-                        "Could not find configuration file. Please reinstall the application."
-                    )
-                    return
+            if not CONFIG_PATH.exists():
+                # Check for legacy config to migrate
+                old_config = OLD_CONFIG_DIR / "config.json"
+                if old_config.exists():
+                    # Load, fix legacy structure, and write to new location
+                    with open(old_config, 'r', encoding='utf-8') as f:
+                        migrated_data = json.load(f)
                     
-            with open(config_path, 'r') as f:
+                    # Flatten legacy client_settings.tui nesting
+                    cs = migrated_data.get("client_settings", {})
+                    if "tui" in cs and isinstance(cs["tui"], dict):
+                        tui = cs.pop("tui")
+                        for key, val in tui.items():
+                            if key not in cs:  # don't overwrite direct keys
+                                cs[key] = val
+                        migrated_data["client_settings"] = cs
+                        logger.info("Config migration: flattened client_settings.tui")
+                    
+                    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                        json.dump(migrated_data, f, indent=2)
+                    
+                    # Rename the old file so it's clearly no longer active
+                    deprecated_path = OLD_CONFIG_DIR / "config.json.deprecated"
+                    old_config.rename(deprecated_path)
+                    logger.info(f"Config: migrated from {old_config} to {CONFIG_PATH}, old file renamed to {deprecated_path}")
+                    self.statusBar().showMessage(
+                        "Configuration migrated to Application Support"
+                    )
+                else:
+                    # First-run: show setup dialog
+                    dialog = SetupDialog(self)
+                    if dialog.exec() != QDialog.DialogCode.Accepted:
+                        logger.warning("Config: user cancelled first-run setup")
+                        QMessageBox.critical(
+                            self, "Configuration Required",
+                            "A configuration is required to run the application.\n\n"
+                            "The application will now close."
+                        )
+                        QTimer.singleShot(0, self.close)
+                        return
+            
+            with open(CONFIG_PATH, 'r') as f:
                 self.config = json.load(f)
                 
             # Set export directory
-            tui_settings = self.config.get("client_settings", {}).get("tui", {})
-            export_dir = tui_settings.get("export_directory", str(DEFAULT_CONFIG_DIR))
+            client_settings = self.config.get("client_settings", {})
+            export_dir = client_settings.get("export_directory", str(DEFAULT_EXPORT_DIR))
             self.export_base_dir = Path(export_dir).expanduser().resolve()
             self.export_base_dir.mkdir(parents=True, exist_ok=True)
             
@@ -2205,8 +3226,8 @@ class TranscriptRecorderApp(QMainWindow):
             
             app_count = self.config.get("application_settings", {})
             log_level = self.config.get("logging", {}).get("level", "INFO")
-            logger.info(f"Config: loaded from {config_path} ({len(app_count)} apps, log_level={log_level})")
-            self.statusBar().showMessage(f"Configuration loaded")
+            logger.info(f"Config: loaded from {CONFIG_PATH} ({len(app_count)} apps, log_level={log_level})")
+            self.statusBar().showMessage("Configuration loaded")
             
         except json.JSONDecodeError as e:
             QMessageBox.critical(
@@ -2239,6 +3260,7 @@ class TranscriptRecorderApp(QMainWindow):
         """Check and warn about accessibility permissions."""
         try:
             if not AXIsProcessTrusted():
+                self._has_accessibility = False
                 QMessageBox.warning(
                     self, "Accessibility Permission Required",
                     "This application requires accessibility permissions to read "
@@ -2247,13 +3269,13 @@ class TranscriptRecorderApp(QMainWindow):
                     "System Settings → Privacy & Security → Accessibility\n\n"
                     "You may need to restart the application after granting permission."
                 )
-                self.new_btn.setEnabled(False)
                 self.statusBar().showMessage("⚠️ Accessibility permission required")
             else:
-                self.new_btn.setEnabled(True)
+                self._has_accessibility = True
                 logger.info("Permissions: accessibility access granted")
         except Exception as e:
             logger.error(f"Permissions: check failed: {e}")
+        self._update_button_states()
             
     def _on_startup_update_available(self, version: str, release_url: str, notes: str, assets: list):
         """Handle notification that a new version is available (from background check)."""
@@ -2294,13 +3316,15 @@ class TranscriptRecorderApp(QMainWindow):
         if self.is_recording:
             self._on_stop_recording()
             
-        # Create recording directory with new structure:
-        # /recordings/recording_{timestamp}_{app_name}/
+        # Create recording directory with date-based structure:
+        # /recordings/{yyyy}/{mm}/recording_{timestamp}_{app_name}/
         #   - meeting_transcript.txt (merged transcript)
         #   - .snapshots/ (created on-demand when first snapshot is taken)
         timestamp = datetime.now()
         folder_name = f"recording_{timestamp.strftime('%Y-%m-%d_%H%M')}_{self.selected_app_key}"
-        self.current_recording_path = self.export_base_dir / "recordings" / folder_name
+        year_folder = timestamp.strftime('%Y')
+        month_folder = timestamp.strftime('%m')
+        self.current_recording_path = self.export_base_dir / "recordings" / year_folder / month_folder / folder_name
         self.snapshots_path = self.current_recording_path / ".snapshots"
         self.merged_transcript_path = self.current_recording_path / "meeting_transcript.txt"
         
@@ -2631,6 +3655,13 @@ class TranscriptRecorderApp(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to update transcript display: {e}")
             
+    def _copy_tool_output(self):
+        """Copy tool output text area contents to clipboard."""
+        text = self.tool_output_area.toPlainText()
+        if text:
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage("Tool output copied to clipboard")
+    
     def _on_copy_transcript(self):
         """Copy transcript to clipboard."""
         text = self.transcript_text.toPlainText()
@@ -2803,13 +3834,14 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Top-level controls
         self.app_combo.setEnabled(not has_session)
-        self.new_btn.setEnabled(not has_session)
+        self.new_btn.setEnabled(not has_session and self._has_accessibility)
         self.reset_btn.setEnabled(has_session)
         
         # Recording controls — enabled when there is any session (active or loaded)
         # Capture Now is disabled while any capture+merge is in progress
-        self.capture_btn.setEnabled(has_session and not self._is_capturing)
-        self.auto_capture_btn.setEnabled(has_session and not self._is_capturing)
+        # Both require accessibility permissions to function
+        self.capture_btn.setEnabled(has_session and not self._is_capturing and self._has_accessibility)
+        self.auto_capture_btn.setEnabled(has_session and not self._is_capturing and self._has_accessibility)
         
         # Tab widget — disabled entirely when no session exists
         self.tab_widget.setEnabled(has_session)
@@ -2999,6 +4031,72 @@ class TranscriptRecorderApp(QMainWindow):
             "▼ Parameters" if visible else "▶ Parameters"
         )
 
+    def _toggle_tool_data_files(self):
+        """Toggle visibility of the data files section."""
+        visible = not self.tool_data_files_widget.isVisible()
+        self.tool_data_files_widget.setVisible(visible)
+        self.tool_data_files_toggle.setText(
+            "▼ Data Files" if visible else "▶ Data Files"
+        )
+
+    def _populate_tool_data_files(self, tool_def: dict):
+        """Build the data files section for the currently selected tool."""
+        # Clear existing data file widgets
+        while self.tool_data_files_layout.count():
+            child = self.tool_data_files_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        data_files = tool_def.get("data_files", [])
+        tool_dir = Path(tool_def.get("_tool_dir", ""))
+        tool_name = tool_def.get("display_name", "")
+
+        if not data_files:
+            self.tool_data_files_toggle.setVisible(False)
+            self.tool_data_files_widget.setVisible(False)
+            return
+
+        for df in data_files:
+            file_name = df.get("file", "")
+            label = df.get("label", file_name)
+            description = df.get("description", "")
+            editor_type = df.get("editor", "key_value_grid")
+            file_path = tool_dir / file_name
+
+            # Row: description + Edit button
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            desc_label = QLabel(f"<b>{label}</b>")
+            if description:
+                desc_label.setToolTip(description)
+            row.addWidget(desc_label, stretch=1)
+
+            edit_btn = QPushButton("Edit")
+            edit_btn.setFixedWidth(60)
+            # Capture variables for the lambda
+            edit_btn.clicked.connect(
+                lambda checked=False, fp=file_path, et=editor_type,
+                       lbl=label, tn=tool_name: self._open_data_file_editor(fp, et, lbl, tn)
+            )
+            row.addWidget(edit_btn)
+
+            row_widget = QWidget()
+            row_widget.setLayout(row)
+            self.tool_data_files_layout.addWidget(row_widget)
+
+        self.tool_data_files_toggle.setVisible(True)
+        # Start collapsed
+        self.tool_data_files_widget.setVisible(False)
+        self.tool_data_files_toggle.setText("▶ Data Files")
+
+    def _open_data_file_editor(self, file_path: Path, editor_type: str,
+                                label: str, tool_name: str):
+        """Open a DataFileEditorDialog for the given data file."""
+        dialog = DataFileEditorDialog(file_path, editor_type, label, tool_name, self)
+        self._data_file_editors.append(dialog)
+        dialog.show()
+
     def _scan_tools(self):
         """Scan ``<export_dir>/tools/`` for tool definitions.
         
@@ -3039,13 +4137,14 @@ class TranscriptRecorderApp(QMainWindow):
             return
         
         for tool_dir in subdirs:
-            # Find the first .json file in the sub-directory
-            json_files = sorted(tool_dir.glob("*.json"))
-            if not json_files:
-                logger.debug(f"Tools: no .json definition in {tool_dir.name}/ — skipped")
-                continue
-            
-            json_path = json_files[0]  # use the first one found
+            # Prefer tool.json; fall back to the first .json file found
+            json_path = tool_dir / "tool.json"
+            if not json_path.exists():
+                json_files = sorted(tool_dir.glob("*.json"))
+                if not json_files:
+                    logger.debug(f"Tools: no .json definition in {tool_dir.name}/ — skipped")
+                    continue
+                json_path = json_files[0]
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     tool_def = json.load(f)
@@ -3117,6 +4216,8 @@ class TranscriptRecorderApp(QMainWindow):
             self.tool_params_table.setVisible(False)
             self.tool_params_table.setRowCount(0)
             self.tool_command_frame.setVisible(False)
+            self.tool_data_files_toggle.setVisible(False)
+            self.tool_data_files_widget.setVisible(False)
             self.tool_output_area.clear()
             return
         
@@ -3166,6 +4267,9 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Command preview starts hidden (collapsed with params section)
         self.tool_command_frame.setVisible(False)
+        
+        # Populate data files section
+        self._populate_tool_data_files(tool_def)
         
         # Show tool info and command preview in the output area
         self._update_tool_output_preview()
@@ -3271,6 +4375,13 @@ class TranscriptRecorderApp(QMainWindow):
             if not flag:
                 continue
             
+            # Boolean parameters: emit the flag alone when truthy, omit when falsy
+            if param.get("type") == "boolean":
+                if value.lower() in ("true", "1", "yes"):
+                    command.append(flag)
+                # When false/empty, simply omit the flag entirely
+                continue
+            
             if value and not value.startswith("<"):
                 command.extend([flag, value])
             elif param.get("required", False):
@@ -3295,20 +4406,51 @@ class TranscriptRecorderApp(QMainWindow):
         return f"{hours}h {minutes}m {secs}s"
     
     def _on_tool_timer_tick(self):
-        """Update the elapsed-time label while a tool is running."""
+        """Update the elapsed-time label while a tool is running.
+        
+        For streaming tools, also monitors idle time and triggers a warning
+        or auto-cancel based on the tool.json ``idle_warning_seconds`` and
+        ``idle_kill_seconds`` settings.
+        """
         elapsed = int(time.time() - self._tool_start_time)
-        self.tool_elapsed_label.setText(self._format_elapsed(elapsed))
-        self.statusBar().showMessage(
-            f"Running tool… {self._format_elapsed(elapsed)}"
-        )
+        elapsed_str = self._format_elapsed(elapsed)
+        self.tool_elapsed_label.setText(elapsed_str)
+        
+        # Idle detection for streaming workers
+        runner = self._tool_runner
+        if isinstance(runner, StreamingToolRunnerWorker):
+            idle = time.time() - runner.last_output_time
+            kill_timeout = getattr(self, "_idle_kill_seconds", 120)
+            warn_timeout = getattr(self, "_idle_warning_seconds", 30)
+            
+            if idle > kill_timeout:
+                logger.warning(f"Tools: idle timeout reached ({idle:.0f}s > {kill_timeout}s), "
+                               f"auto-cancelling")
+                self.statusBar().showMessage(
+                    f"Agent idle for {int(idle)}s — auto-cancelling…"
+                )
+                self._on_cancel_tool()
+                return
+            elif idle > warn_timeout:
+                remaining = int(kill_timeout - idle)
+                self.statusBar().showMessage(
+                    f"Running tool… {elapsed_str} — agent idle for {int(idle)}s "
+                    f"(auto-cancel in {remaining}s)"
+                )
+                return
+        
+        self.statusBar().showMessage(f"Running tool… {elapsed_str}")
     
     def _on_cancel_tool(self):
         """Cancel the currently running tool."""
         if self._tool_runner:
             logger.info("Tools: cancel requested by user")
-            self._tool_runner.cancel()
             self.cancel_tool_btn.setEnabled(False)
             self.cancel_tool_btn.setText("Cancelling…")
+            self._tool_runner.cancel()
+            logger.debug("Tools: cancel() returned, waiting for worker thread to finish")
+        else:
+            logger.warning("Tools: cancel clicked but no _tool_runner active")
     
     def _on_run_tool(self):
         """Build the command line from the parameters table and run the script."""
@@ -3349,13 +4491,38 @@ class TranscriptRecorderApp(QMainWindow):
         
         logger.info(f"Tools: started '{display_name}' → {cmd_text}")
         
+        # Store idle-timeout settings from tool.json (used by _on_tool_timer_tick)
+        self._idle_warning_seconds = tool_def.get("idle_warning_seconds", 30)
+        self._idle_kill_seconds = tool_def.get("idle_kill_seconds", 120)
+        
         # Start background worker (cwd = the tool's own directory)
-        self._tool_runner = ToolRunnerWorker(command, cwd=tool_dir)
+        if tool_def.get("streaming", False):
+            parser_name = tool_def.get("stream_parser", "raw")
+            parser_fn = STREAM_PARSERS.get(parser_name, _stream_parser_raw)
+            logger.debug(f"Tools: using streaming worker with parser '{parser_name}'")
+            self._tool_runner = StreamingToolRunnerWorker(
+                command, cwd=tool_dir, parser_fn=parser_fn)
+            self._tool_runner.output_line.connect(self._on_tool_output_line)
+        else:
+            self._tool_runner = ToolRunnerWorker(command, cwd=tool_dir)
+        
         self._tool_runner.output_ready.connect(self._on_tool_finished)
         self._tool_runner.start()
     
+    def _on_tool_output_line(self, text: str):
+        """Append a single streaming line to the tool output area (real-time)."""
+        cursor = self.tool_output_area.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.tool_output_area.setTextCursor(cursor)
+        self.tool_output_area.insertPlainText(text + "\n")
+        # Auto-scroll to bottom
+        scrollbar = self.tool_output_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
     def _on_tool_finished(self, stdout: str, stderr: str, exit_code: int):
         """Handle tool script completion."""
+        logger.debug(f"Tools._on_tool_finished: exit_code={exit_code}, "
+                     f"stdout_len={len(stdout)}, stderr_len={len(stderr)}")
         # Stop elapsed timer
         if self._tool_elapsed_timer:
             self._tool_elapsed_timer.stop()
@@ -3367,11 +4534,14 @@ class TranscriptRecorderApp(QMainWindow):
         display_name = self._discovered_tools.get(tool_key, {}).get("display_name", "Tool")
         
         cancelled = exit_code == -2
+        is_streaming = isinstance(self._tool_runner, StreamingToolRunnerWorker)
         
-        # Append output to the existing header
+        # Append output to the existing content in the output area.
+        # For streaming tools stdout was already displayed line-by-line,
+        # so we only append stderr and the footer.
         current = self.tool_output_area.toPlainText()
         parts = [current]
-        if stdout:
+        if not is_streaming and stdout:
             parts.append(stdout)
         if stderr:
             parts.append(f"\n--- stderr ---\n{stderr}")
@@ -3523,6 +4693,50 @@ class TranscriptRecorderApp(QMainWindow):
         self._tool_json_editor.config_saved.connect(self._scan_tools)
         self._tool_json_editor.show()
     
+    def _show_tool_data_file_picker(self):
+        """Show a picker for all editable data files across all discovered tools."""
+        # Collect all data files from all tools
+        all_data_files: List[tuple] = []  # (display_label, file_path, editor_type, tool_name)
+        for tool_key, tool_def in self._discovered_tools.items():
+            tool_dir = Path(tool_def.get("_tool_dir", ""))
+            tool_name = tool_def.get("display_name", tool_key)
+            for df in tool_def.get("data_files", []):
+                file_name = df.get("file", "")
+                label = df.get("label", file_name)
+                editor_type = df.get("editor", "key_value_grid")
+                file_path = tool_dir / file_name
+                display = f"{tool_name} — {label}"
+                all_data_files.append((display, file_path, editor_type, label, tool_name))
+
+        if not all_data_files:
+            QMessageBox.information(
+                self, "No Data Files",
+                "No tools with editable data files were found.\n\n"
+                "Tools can declare editable data files by adding a\n"
+                "\"data_files\" section to their tool.json."
+            )
+            return
+
+        if len(all_data_files) == 1:
+            _, fp, et, lbl, tn = all_data_files[0]
+            self._open_data_file_editor(fp, et, lbl, tn)
+            return
+
+        names = [item[0] for item in all_data_files]
+        name, ok = QInputDialog.getItem(
+            self,
+            "Edit Data File",
+            "Choose a data file to edit:",
+            names,
+            0,
+            False,
+        )
+        if not ok:
+            return
+        idx = names.index(name)
+        _, fp, et, lbl, tn = all_data_files[idx]
+        self._open_data_file_editor(fp, et, lbl, tn)
+
     def _open_tools_folder(self):
         """Open the tools directory in Finder."""
         tools_dir = self.export_base_dir / "tools"
@@ -3532,18 +4746,25 @@ class TranscriptRecorderApp(QMainWindow):
     def _reload_configuration(self):
         """Reload the configuration file."""
         try:
-            with open(DEFAULT_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 self.config = json.load(f)
             
             # Reconfigure logging
             setup_logging(self.config)
+            
+            # Update export directory from config
+            client_settings = self.config.get("client_settings", {})
+            export_dir = client_settings.get("export_directory", str(DEFAULT_EXPORT_DIR))
+            self.export_base_dir = Path(export_dir).expanduser().resolve()
+            self.export_base_dir.mkdir(parents=True, exist_ok=True)
+            (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
             
             # Repopulate app selection and re-scan tools
             self._populate_app_combo()
             self._scan_tools()
             
             app_count = len(self.config.get("application_settings", {}))
-            logger.info(f"Config: reloaded from {DEFAULT_CONFIG_PATH} ({app_count} apps)")
+            logger.info(f"Config: reloaded from {CONFIG_PATH} ({app_count} apps)")
             self.statusBar().showMessage("Configuration reloaded")
             
         except json.JSONDecodeError as e:
@@ -3555,6 +4776,41 @@ class TranscriptRecorderApp(QMainWindow):
             QMessageBox.critical(
                 self, "Configuration Error",
                 f"Failed to reload configuration:\n{e}"
+            )
+    
+    def _change_export_directory(self):
+        """Let the user pick a new export directory and persist the change."""
+        new_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose New Export Directory",
+            str(self.export_base_dir),
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if not new_dir:
+            return
+        
+        try:
+            # Read current config, update export_directory, write back
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["export_directory"] = new_dir
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            logger.info(f"Export directory changed to {new_dir}")
+            
+            # Reload so the change takes effect immediately
+            self._reload_configuration()
+            self.statusBar().showMessage(f"Export directory changed to {new_dir}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Error",
+                f"Failed to update export directory:\n{e}"
             )
     
     def _clear_log_file(self):
@@ -3587,8 +4843,8 @@ class TranscriptRecorderApp(QMainWindow):
             QMessageBox.information(self, "No Recordings", "No recordings folder found.")
             return
         
-        # Count snapshots folders
-        snapshots_folders = list(recordings_dir.glob("*/.snapshots"))
+        # Count snapshots folders (search recursively through date subfolders)
+        snapshots_folders = list(recordings_dir.glob("**/.snapshots"))
         
         if not snapshots_folders:
             QMessageBox.information(self, "No Snapshots", "No snapshot folders found to clear.")
@@ -3637,8 +4893,9 @@ class TranscriptRecorderApp(QMainWindow):
             return
         
         # Find recording folders that are effectively empty (no files anywhere inside)
+        # Recording folders live under recordings/{yyyy}/{mm}/ subdirectories
         empty_folders: List[Path] = []
-        for folder in sorted(recordings_dir.iterdir()):
+        for folder in sorted(recordings_dir.glob("**/recording_*")):
             if not folder.is_dir():
                 continue
             # Skip the currently active recording folder
