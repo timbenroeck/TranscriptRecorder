@@ -23,6 +23,9 @@ Usage
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt
 from PyQt6.QtGui import QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
@@ -35,24 +38,24 @@ from PyQt6.QtWidgets import QApplication
 _TINTS: dict[str, dict[bool, str]] = {
     # tint_name -> {is_dark: hex_colour}
     "default": {
-        True:  "#FFFFFF",   # dark-mode  text_main
-        False: "#1D1D1F",   # light-mode text_main
+        True:  "#E1E1E6",   # dark-mode  text_main
+        False: "#333333",   # light-mode text_main
     },
     "primary": {
-        True:  "#007AFF",   # Apple Blue (same in both modes)
-        False: "#007AFF",
+        True:  "#7AA2FF",   # Slate Blue (dark – desaturated, lighter)
+        False: "#4A67AD",   # Slate Blue (light)
     },
     "secondary": {
-        True:  "#98989D",   # dark-mode  text_sec
-        False: "#86868B",   # light-mode text_sec
+        True:  "#8E8E93",   # dark-mode  text_sec
+        False: "#636366",   # light-mode text_sec
     },
     "success": {
-        True:  "#34C759",
-        False: "#34C759",
+        True:  "#81C784",
+        False: "#388E3C",
     },
     "danger": {
-        True:  "#FF3B30",
-        False: "#FF3B30",
+        True:  "#E57373",
+        False: "#C62828",
     },
 }
 
@@ -161,6 +164,12 @@ _SVG_SOURCES: dict[str, str] = {
         '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>'
         '<path d="M8 16H3v5"/></svg>'
     ),
+    "chevron_down": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="m6 9 6 6 6-6"/></svg>'
+    ),
 }
 
 
@@ -222,6 +231,52 @@ class IconManager:
     def available_icons(cls) -> list[str]:
         """Return the names of all registered SVG icons."""
         return list(_SVG_SOURCES.keys())
+
+    @classmethod
+    def render_to_file(
+        cls,
+        name: str,
+        *,
+        is_dark: bool = False,
+        tint: str = "default",
+        size: int = 12,
+    ) -> str:
+        """Render an icon to a temporary PNG file and return its absolute path.
+
+        Useful for QSS ``image: url(...)`` rules that require a file path.
+        The rendered pixmap honours the screen's ``devicePixelRatio`` for
+        Retina sharpness, identical to :meth:`_render`.
+        """
+        svg_str = cls._tinted_svg(name, is_dark, tint)
+
+        dpr = 1.0
+        app = QApplication.instance()
+        if app is not None:
+            screen = app.primaryScreen()
+            if screen is not None:
+                dpr = screen.devicePixelRatio()
+
+        physical = int(size * dpr)
+
+        renderer = QSvgRenderer(QByteArray(svg_str.encode("utf-8")))
+        renderer.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+
+        pixmap = QPixmap(physical, physical)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.setDevicePixelRatio(dpr)
+
+        target = QRectF(0, 0, size, size)
+        painter = QPainter(pixmap)
+        renderer.render(painter, target)
+        painter.end()
+
+        # Write to a stable temp directory so the path can be reused
+        cache_dir = Path(tempfile.gettempdir()) / "TranscriptRecorder_icons"
+        cache_dir.mkdir(exist_ok=True)
+        tag = "dark" if is_dark else "light"
+        out_path = cache_dir / f"{name}_{tint}_{size}_{tag}.png"
+        pixmap.save(str(out_path), "PNG")
+        return str(out_path)
 
     # ------------------------------------------------------------------
     # Internal helpers

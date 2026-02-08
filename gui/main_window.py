@@ -66,6 +66,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.is_recording = False
         self.snapshot_count = 0
         self._is_capturing = False  # True while a capture+merge is in progress
+        self._last_merged_line_count = 0  # Track line count for delta display
         self.capture_interval = 30  # Default capture interval in seconds
         self.theme_mode = "system"  # "light", "dark", or "system"
         self.meeting_details_dirty = False  # Track if meeting details need saving
@@ -109,7 +110,7 @@ class TranscriptRecorderApp(QMainWindow):
     def _setup_window(self):
         """Configure main window properties."""
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(450, 300)
+        self.setMinimumSize(350, 300)
         # Will be adjusted to fit content after UI is built
         
         # Try to load app icon
@@ -143,25 +144,26 @@ class TranscriptRecorderApp(QMainWindow):
         app_layout.setSpacing(8)
         
         self.app_combo = QComboBox()
-        self.app_combo.setMinimumWidth(180)
+        self.app_combo.setMinimumWidth(120)
         self.app_combo.currentIndexChanged.connect(self._on_app_changed)
         app_layout.addWidget(self.app_combo, stretch=1)
         
-        self.new_btn = QPushButton("New Recording")
+        self.new_btn = QPushButton("New")
         self.new_btn.setProperty("class", "primary")
-        self.new_btn.setToolTip("Start a new recording session")
+        self.new_btn.setToolTip("Create a new meeting recording")
         self.new_btn.clicked.connect(self._on_new_recording)
         app_layout.addWidget(self.new_btn)
         
         self.reset_btn = QPushButton("Reset")
-        self.reset_btn.setProperty("class", "pink")
+        self.reset_btn.setProperty("class", "danger-outline")
         self.reset_btn.setEnabled(False)
-        self.reset_btn.setToolTip("Reset the current recording session")
+        self.reset_btn.setToolTip("Clear the current meeting recording")
         self.reset_btn.clicked.connect(self._on_reset_recording)
         app_layout.addWidget(self.reset_btn)
         
-        self.load_previous_btn = QPushButton("Load Previous Meeting")
-        self.load_previous_btn.setToolTip("Load meeting details and transcript from a previous recording folder")
+        self.load_previous_btn = QPushButton("History")
+        self.load_previous_btn.setProperty("class", "secondary-action")
+        self.load_previous_btn.setToolTip("Open a previous meeting and transcript")
         self.load_previous_btn.clicked.connect(self._on_load_previous_meeting)
         app_layout.addWidget(self.load_previous_btn)
         
@@ -173,17 +175,18 @@ class TranscriptRecorderApp(QMainWindow):
         controls_layout.setContentsMargins(0, 4, 0, 4)
         controls_layout.setSpacing(8)
         
-        self.capture_btn = QPushButton("Capture Now")
-        self.capture_btn.setProperty("class", "primary")
+        self.capture_btn = QPushButton("Capture")
+        self.capture_btn.setProperty("class", "action")
         self.capture_btn.setEnabled(False)
-        self.capture_btn.setToolTip("Take a single transcript snapshot")
+        self.capture_btn.setToolTip("Capture a single transcript snapshot")
         self.capture_btn.clicked.connect(self._on_capture_now)
         controls_layout.addWidget(self.capture_btn)
         
-        self.auto_capture_btn = QPushButton("Start Auto Capture")
-        self.auto_capture_btn.setProperty("class", "success")
+        self.auto_capture_btn = QPushButton("Auto Capture")
+        self.auto_capture_btn.setProperty("class", "toggle_off")
         self.auto_capture_btn.setEnabled(False)
-        self.auto_capture_btn.setToolTip("Toggle continuous transcript capture")
+        self.auto_capture_btn.setMinimumWidth(120)  # Accommodate "Auto Capture" and "Stop (120s)"
+        self.auto_capture_btn.setToolTip("Start continuous transcript capture")
         self.auto_capture_btn.clicked.connect(self._on_toggle_auto_capture)
         controls_layout.addWidget(self.auto_capture_btn)
         
@@ -228,7 +231,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.time_down_btn.setIcon(IconManager.get_icon("arrow_down", is_dark=is_dark, size=20))
         self.time_down_btn.setFixedSize(28, 28)
         self.time_down_btn.setIconSize(QSize(20, 20))
-        self.time_down_btn.setToolTip("Round time down by 5 minutes")
+        self.time_down_btn.setToolTip("Round meeting time down by 5 minutes")
         self.time_down_btn.clicked.connect(self._on_round_time_down)
         datetime_layout.addWidget(self.time_down_btn)
         
@@ -237,7 +240,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.time_up_btn.setIcon(IconManager.get_icon("arrow_up", is_dark=is_dark, size=20))
         self.time_up_btn.setFixedSize(28, 28)
         self.time_up_btn.setIconSize(QSize(20, 20))
-        self.time_up_btn.setToolTip("Round time up by 5 minutes")
+        self.time_up_btn.setToolTip("Round meeting time up by 5 minutes")
         self.time_up_btn.clicked.connect(self._on_round_time_up)
         datetime_layout.addWidget(self.time_up_btn)
         
@@ -284,7 +287,7 @@ class TranscriptRecorderApp(QMainWindow):
             IconManager.get_icon("save", is_dark=is_dark, size=16))
         self.save_details_btn.setIconSize(QSize(16, 16))
         self.save_details_btn.setFixedSize(28, 28)
-        self.save_details_btn.setToolTip("Save meeting details")
+        self.save_details_btn.setToolTip("Save meeting details to disk")
         self.save_details_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_details_btn.setStyleSheet(btn_style)
         self.save_details_btn.setEnabled(False)
@@ -296,7 +299,7 @@ class TranscriptRecorderApp(QMainWindow):
             IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
         self.open_folder_btn2.setIconSize(QSize(16, 16))
         self.open_folder_btn2.setFixedSize(28, 28)
-        self.open_folder_btn2.setToolTip("Open recording folder")
+        self.open_folder_btn2.setToolTip("Open meeting folder in Finder")
         self.open_folder_btn2.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_folder_btn2.setStyleSheet(btn_style)
         self.open_folder_btn2.setEnabled(False)
@@ -326,7 +329,7 @@ class TranscriptRecorderApp(QMainWindow):
             "To begin:\n"
             "1. Select your meeting application above\n"
             "2. Make sure your meeting has captions/transcript enabled\n"
-            "3. Click 'New Recording' then 'Capture Now' or 'Start Auto Capture'"
+            "3. Click 'New' then 'Capture' or 'Auto Capture'"
         )
         self.transcript_text.setFont(QFont("SF Pro", 12))
         transcript_row.addWidget(self.transcript_text)
@@ -375,7 +378,7 @@ class TranscriptRecorderApp(QMainWindow):
             IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
         self.open_folder_btn.setIconSize(QSize(16, 16))
         self.open_folder_btn.setFixedSize(28, 28)
-        self.open_folder_btn.setToolTip("Open recording folder")
+        self.open_folder_btn.setToolTip("Open meeting folder in Finder")
         self.open_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_folder_btn.setStyleSheet(btn_style)
         self.open_folder_btn.setEnabled(False)
@@ -404,19 +407,15 @@ class TranscriptRecorderApp(QMainWindow):
         tool_select_layout.addWidget(self.tool_combo, stretch=1)
         
         self.run_tool_btn = QPushButton("Run")
-        self.run_tool_btn.setProperty("class", "primary")
+        self.run_tool_btn.setProperty("class", "action")
+        self.run_tool_btn.setFixedWidth(100)
         self.run_tool_btn.setEnabled(False)
-        self.run_tool_btn.clicked.connect(self._on_run_tool)
+        self.run_tool_btn.clicked.connect(self._on_run_cancel_toggle)
         tool_select_layout.addWidget(self.run_tool_btn)
         
-        self.cancel_tool_btn = QPushButton("Cancel")
-        self.cancel_tool_btn.setEnabled(False)
-        self.cancel_tool_btn.setVisible(False)
-        self.cancel_tool_btn.clicked.connect(self._on_cancel_tool)
-        tool_select_layout.addWidget(self.cancel_tool_btn)
-        
         self.tool_elapsed_label = QLabel("")
-        self.tool_elapsed_label.setVisible(False)
+        self.tool_elapsed_label.setFixedWidth(52)
+        self.tool_elapsed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tool_select_layout.addWidget(self.tool_elapsed_label)
         
         tool_select_layout.addStretch()
@@ -432,10 +431,8 @@ class TranscriptRecorderApp(QMainWindow):
         
         # --- Tool description (no border) ---
         self.tool_description_label = QLabel("")
+        self.tool_description_label.setObjectName("tool_description")
         self.tool_description_label.setWordWrap(True)
-        self.tool_description_label.setStyleSheet(
-            "color: palette(windowText); font-size: 13px; padding: 2px 0;"
-        )
         self.tool_description_label.setVisible(False)
         tools_layout.addWidget(self.tool_description_label)
         
@@ -443,16 +440,15 @@ class TranscriptRecorderApp(QMainWindow):
         tools_layout.addSpacing(6)
         
         self.tool_params_toggle = QPushButton("▶ Parameters")
+        self.tool_params_toggle.setObjectName("section_toggle")
         self.tool_params_toggle.setFlat(True)
-        self.tool_params_toggle.setStyleSheet(
-            "text-align: left; font-weight: 600; padding: 2px 0;"
-        )
         self.tool_params_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tool_params_toggle.setVisible(False)
         self.tool_params_toggle.clicked.connect(self._toggle_tool_params)
         tools_layout.addWidget(self.tool_params_toggle)
         
         self.tool_params_table = QTableWidget(0, 3)
+        self.tool_params_table.setObjectName("tool_params_table")
         self.tool_params_table.setHorizontalHeaderLabels(["Flag", "Parameter", "Value"])
         self.tool_params_table.horizontalHeader().setStretchLastSection(True)
         self.tool_params_table.horizontalHeader().setSectionResizeMode(
@@ -472,9 +468,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.tool_command_frame = QFrame()
         self.tool_command_frame.setFrameShape(QFrame.Shape.StyledPanel)
         self.tool_command_frame.setFrameShadow(QFrame.Shadow.Plain)
-        self.tool_command_frame.setStyleSheet(
-            "QFrame { border: 1px solid palette(mid); border-radius: 4px; }"
-        )
+        self.tool_command_frame.setObjectName("collapsible_panel")
         self.tool_command_frame.setVisible(False)
         cmd_inner = QVBoxLayout(self.tool_command_frame)
         cmd_inner.setContentsMargins(8, 6, 8, 6)
@@ -490,18 +484,17 @@ class TranscriptRecorderApp(QMainWindow):
         
         # --- Data Files section (collapsible, shown when tool has data_files) ---
         self.tool_data_files_toggle = QPushButton("▶ Data Files")
+        self.tool_data_files_toggle.setObjectName("section_toggle")
         self.tool_data_files_toggle.setFlat(True)
-        self.tool_data_files_toggle.setStyleSheet(
-            "text-align: left; font-weight: 600; padding: 2px 0;"
-        )
         self.tool_data_files_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tool_data_files_toggle.setVisible(False)
         self.tool_data_files_toggle.clicked.connect(self._toggle_tool_data_files)
         tools_layout.addWidget(self.tool_data_files_toggle)
         
         self.tool_data_files_widget = QWidget()
+        self.tool_data_files_widget.setObjectName("collapsible_panel")
         self.tool_data_files_layout = QVBoxLayout(self.tool_data_files_widget)
-        self.tool_data_files_layout.setContentsMargins(4, 0, 0, 0)
+        self.tool_data_files_layout.setContentsMargins(8, 6, 8, 6)
         self.tool_data_files_layout.setSpacing(4)
         self.tool_data_files_widget.setVisible(False)
         tools_layout.addWidget(self.tool_data_files_widget)
@@ -539,7 +532,7 @@ class TranscriptRecorderApp(QMainWindow):
             IconManager.get_icon("copy", is_dark=is_dark, size=16))
         self.tool_copy_btn.setIconSize(QSize(16, 16))
         self.tool_copy_btn.setFixedSize(28, 28)
-        self.tool_copy_btn.setToolTip("Copy output to clipboard")
+        self.tool_copy_btn.setToolTip("Copy tool output to clipboard")
         self.tool_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tool_copy_btn.setStyleSheet(btn_style)
         self.tool_copy_btn.clicked.connect(self._copy_tool_output)
@@ -550,7 +543,7 @@ class TranscriptRecorderApp(QMainWindow):
             IconManager.get_icon("download", is_dark=is_dark, size=16))
         self.tool_download_btn.setIconSize(QSize(16, 16))
         self.tool_download_btn.setFixedSize(28, 28)
-        self.tool_download_btn.setToolTip("Save output to file")
+        self.tool_download_btn.setToolTip("Save tool output to file")
         self.tool_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tool_download_btn.setStyleSheet(btn_style)
         self.tool_download_btn.clicked.connect(self._download_tool_output)
@@ -650,7 +643,9 @@ class TranscriptRecorderApp(QMainWindow):
         """
         is_dark = self._is_dark_mode()
         app = QApplication.instance()
-        app.setStyleSheet(get_application_stylesheet(is_dark))
+        combo_arrow = IconManager.render_to_file(
+            "chevron_down", is_dark=is_dark, tint="secondary", size=12)
+        app.setStyleSheet(get_application_stylesheet(is_dark, combo_arrow_path=combo_arrow))
         
         # Flush the icon cache so icons re-render with the new tint
         IconManager.refresh()
@@ -698,7 +693,7 @@ class TranscriptRecorderApp(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("File")
         
-        new_action = QAction("New Recording", self)
+        new_action = QAction("New", self)
         new_action.setShortcut("Cmd+N")
         new_action.triggered.connect(self._on_new_recording)
         file_menu.addAction(new_action)
@@ -1067,7 +1062,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         self._update_button_states()
         self.statusBar().showMessage(f"Ready to record — {folder_name}")
-        self._set_status("Session ready", "green")
+        self._set_status("Recording ready", "info")
         logger.info(f"New session: prepared for {self.selected_app_key} (folder deferred: {self.current_recording_path})")
         
         # Set focus to Meeting Name field for quick entry
@@ -1079,7 +1074,7 @@ class TranscriptRecorderApp(QMainWindow):
             reply = QMessageBox.question(
                 self, "Auto Capture Running",
                 "Auto capture is currently running. Resetting will stop "
-                "the capture and clear the current session.\n\n"
+                "the capture and clear the current recording.\n\n"
                 "Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
@@ -1093,6 +1088,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.snapshots_path = None
         self.merged_transcript_path = None
         self.snapshot_count = 0
+        self._last_merged_line_count = 0
         self.transcript_text.clear()
         self.transcript_text.setToolTip("Lines: 0")
         
@@ -1114,8 +1110,8 @@ class TranscriptRecorderApp(QMainWindow):
         self.tab_widget.setCurrentIndex(0)
         
         self._update_button_states()
-        self._set_status("Ready", "gray")
-        self.statusBar().showMessage("Session reset")
+        self._set_status("Ready")
+        self.statusBar().showMessage("Recording reset")
         logger.info("Session reset")
         
     def _ensure_recorder(self) -> bool:
@@ -1175,7 +1171,7 @@ class TranscriptRecorderApp(QMainWindow):
         self.recording_worker.start()
         self.is_recording = True
         self._update_button_states()
-        self._set_status("Auto capturing...", "#2ecc71")
+        self._set_status("Auto capture started", "info")
         self.statusBar().showMessage(f"Auto capture running (every {self.capture_interval}s)")
         logger.info(f"Recording started: auto capture every {self.capture_interval}s")
         
@@ -1189,7 +1185,7 @@ class TranscriptRecorderApp(QMainWindow):
             
         self.is_recording = False
         self._update_button_states()
-        self._set_status("Stopped", "orange")
+        self._set_status("Stopped", "warn")
         
         # Export index file to the .snapshots folder
         if self.recorder_instance and self.recorder_instance.snapshots:
@@ -1261,6 +1257,7 @@ class TranscriptRecorderApp(QMainWindow):
             if success and file_path:
                 self.snapshot_count += 1
                 overlap_count = 0
+                prev_line_count = self._last_merged_line_count
                 
                 if self.merged_transcript_path and self.merged_transcript_path.exists():
                     merge_ok, _, overlap_count = smart_merge(
@@ -1279,12 +1276,19 @@ class TranscriptRecorderApp(QMainWindow):
                 # Save meeting details if modified
                 self._save_meeting_details()
                 
-                # Display the merged transcript
+                # Display the merged transcript (updates _last_merged_line_count)
                 self._update_transcript_display(str(self.merged_transcript_path), line_count or 0)
+                
+                # Build status message with line count and delta
+                total_lines = self._last_merged_line_count
+                delta = total_lines - prev_line_count
                 self.statusBar().showMessage(
                     f"{source} capture: {line_count} lines (snapshot #{self.snapshot_count})"
                 )
-                self._set_status("Captured", "green")
+                if delta > 0:
+                    self._set_status(f"Transcript: {total_lines} lines (+{delta} new)", "info")
+                else:
+                    self._set_status(f"Transcript: {total_lines} lines", "info")
             else:
                 logger.warning(f"{source} capture: no transcript data returned")
                 if not auto:
@@ -1295,12 +1299,12 @@ class TranscriptRecorderApp(QMainWindow):
                         "• Captions/transcript is enabled\n"
                         "• The transcript window is visible"
                     )
-                self._set_status("Capture failed", "red")
+                self._set_status("Capture failed", "error")
         except Exception as e:
             logger.error(f"{source} capture failed: {e}", exc_info=True)
             if not auto:
                 QMessageBox.critical(self, "Error", f"Capture failed:\n{e}")
-            self._set_status("Error", "red")
+            self._set_status("Error", "error")
         finally:
             loop.close()
             self._is_capturing = False
@@ -1313,11 +1317,11 @@ class TranscriptRecorderApp(QMainWindow):
         self._do_capture_and_merge(auto=True)
             
     def _on_countdown_tick(self, seconds: int):
-        """Update countdown display in status bar."""
+        """Update countdown display in the auto capture button label."""
         if seconds == 0:
-            self.statusBar().showMessage("Capturing...")
+            self.auto_capture_btn.setText("Stop (\u2026)")
         else:
-            self.statusBar().showMessage(f"Next capture in {seconds}s")
+            self.auto_capture_btn.setText(f"Stop ({seconds}s)")
         
     def _update_transcript_display(self, file_path: str, line_count: int = 0):
         """Update the transcript preview from the merged transcript file."""
@@ -1326,8 +1330,9 @@ class TranscriptRecorderApp(QMainWindow):
                 content = f.read()
             self.transcript_text.setText(content)
             
-            # Count actual lines in the merged file
+            # Count actual lines in the merged file and track for delta display
             actual_lines = len(content.splitlines())
+            self._last_merged_line_count = actual_lines
             self.transcript_text.setToolTip(f"Lines: {actual_lines}")
             
             # Scroll to bottom
@@ -1433,7 +1438,7 @@ class TranscriptRecorderApp(QMainWindow):
             reply = QMessageBox.question(
                 self, "Auto Capture Running",
                 "Auto capture is currently running. Loading a previous meeting "
-                "will stop the capture and reset the current session.\n\n"
+                "will stop the capture and reset the current recording.\n\n"
                 "Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
@@ -1483,7 +1488,7 @@ class TranscriptRecorderApp(QMainWindow):
         self._update_button_states()
         
         folder_name = selected_path.name
-        self._set_status("Loaded previous meeting", "blue")
+        self._set_status("Loaded previous meeting", "info")
         self.statusBar().showMessage(f"Loaded — {folder_name}")
         logger.info(f"Loaded previous meeting from: {selected_path}")
         
@@ -1565,11 +1570,13 @@ class TranscriptRecorderApp(QMainWindow):
     def _update_auto_capture_btn_style(self):
         """Update the auto capture button text and color based on recording state."""
         if self.is_recording:
-            self.auto_capture_btn.setText("Stop Auto Capture")
-            self.auto_capture_btn.setProperty("class", "danger")
+            self.auto_capture_btn.setText(f"Stop ({self.capture_interval}s)")
+            self.auto_capture_btn.setToolTip("Stop continuous transcript capture")
+            self.auto_capture_btn.setProperty("class", "toggle_on")
         else:
-            self.auto_capture_btn.setText("Start Auto Capture")
-            self.auto_capture_btn.setProperty("class", "success")
+            self.auto_capture_btn.setText("Auto Capture")
+            self.auto_capture_btn.setToolTip("Start continuous transcript capture")
+            self.auto_capture_btn.setProperty("class", "toggle_off")
         
         self.auto_capture_btn.style().unpolish(self.auto_capture_btn)
         self.auto_capture_btn.style().polish(self.auto_capture_btn)
@@ -1590,7 +1597,7 @@ class TranscriptRecorderApp(QMainWindow):
             self.compact_btn.setIcon(IconManager.get_icon(
                 "chevrons_up", is_dark=is_dark, size=16))
             self.compact_btn.setToolTip("Compact view")
-            self.setMinimumHeight(300)
+            self.setMinimumSize(350, 300)
         
         self._maximized_view = not self._maximized_view
         
@@ -1610,6 +1617,10 @@ class TranscriptRecorderApp(QMainWindow):
 
         If currently maximized, restore to default size first so the user
         never sees a compact + maximized state.
+
+        Compact mode hides the tab section and shrinks both width and
+        height to the tightest size that still fits the top-bar controls
+        without wrapping.
         """
         is_dark = self._is_dark_mode()
         
@@ -1631,15 +1642,16 @@ class TranscriptRecorderApp(QMainWindow):
                 "chevrons_down", is_dark=is_dark, size=16))
             self.compact_btn.setToolTip("Expand view")
             QApplication.processEvents()
-            self.setMinimumHeight(0)
-            self.resize(self.width(), self.minimumSizeHint().height())
+            self.setMinimumSize(0, 0)
+            hint = self.minimumSizeHint()
+            self.resize(hint.width(), hint.height())
         else:
             self.tab_widget.show()
             self.separator_bottom.show()
             self.compact_btn.setIcon(IconManager.get_icon(
                 "chevrons_up", is_dark=is_dark, size=16))
             self.compact_btn.setToolTip("Compact view")
-            self.setMinimumHeight(300)
+            self.setMinimumSize(350, 300)
             self.resize(self._expanded_size)
     
     def _on_toggle_auto_capture(self):
@@ -1910,6 +1922,7 @@ class TranscriptRecorderApp(QMainWindow):
             row.addWidget(edit_btn)
 
             row_widget = QWidget()
+            row_widget.setObjectName("panel_row")
             row_widget.setLayout(row)
             self.tool_data_files_layout.addWidget(row_widget)
 
@@ -2012,7 +2025,8 @@ class TranscriptRecorderApp(QMainWindow):
         has_tool = tool_key is not None
         has_session = self.recorder_instance is not None or self.current_recording_path is not None
         is_running = self._tool_runner is not None
-        self.run_tool_btn.setEnabled(has_tool and has_session and not is_running)
+        if not is_running:
+            self.run_tool_btn.setEnabled(has_tool and has_session)
         
         if not has_tool:
             self.tool_separator.setVisible(False)
@@ -2214,12 +2228,19 @@ class TranscriptRecorderApp(QMainWindow):
         
         self.statusBar().showMessage(f"Running tool… {elapsed_str}")
     
+    def _on_run_cancel_toggle(self):
+        """Dispatch the Run/Cancel toggle button click."""
+        if self._tool_runner is not None:
+            self._on_cancel_tool()
+        else:
+            self._on_run_tool()
+
     def _on_cancel_tool(self):
         """Cancel the currently running tool."""
         if self._tool_runner:
             logger.info("Tools: cancel requested by user")
-            self.cancel_tool_btn.setEnabled(False)
-            self.cancel_tool_btn.setText("Cancelling…")
+            self.run_tool_btn.setEnabled(False)
+            self.run_tool_btn.setText("Cancelling…")
             self._tool_runner.cancel()
             logger.debug("Tools: cancel() returned, waiting for worker thread to finish")
         else:
@@ -2242,15 +2263,13 @@ class TranscriptRecorderApp(QMainWindow):
             f"command: {cmd_text}\n"
         )
         
-        self.run_tool_btn.setEnabled(False)
-        self.run_tool_btn.setText("Running…")
-        self.cancel_tool_btn.setText("Cancel")
-        self.cancel_tool_btn.setEnabled(True)
-        self.cancel_tool_btn.setVisible(True)
+        self.run_tool_btn.setText("Cancel")
+        self.run_tool_btn.setProperty("class", "danger-outline")
+        self.run_tool_btn.style().unpolish(self.run_tool_btn)
+        self.run_tool_btn.style().polish(self.run_tool_btn)
         
         self._tool_start_time = time.time()
         self.tool_elapsed_label.setText("0s")
-        self.tool_elapsed_label.setVisible(True)
         if self._tool_elapsed_timer is None:
             self._tool_elapsed_timer = QTimer(self)
             self._tool_elapsed_timer.timeout.connect(self._on_tool_timer_tick)
@@ -2320,10 +2339,11 @@ class TranscriptRecorderApp(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
         
         self.run_tool_btn.setText("Run")
+        self.run_tool_btn.setProperty("class", "action")
         self.run_tool_btn.setEnabled(True)
-        self.cancel_tool_btn.setEnabled(False)
-        self.cancel_tool_btn.setVisible(False)
-        self.tool_elapsed_label.setVisible(False)
+        self.run_tool_btn.style().unpolish(self.run_tool_btn)
+        self.run_tool_btn.style().polish(self.run_tool_btn)
+        self.tool_elapsed_label.setText("")
         self._tool_runner = None
         
         if cancelled:
@@ -2341,9 +2361,22 @@ class TranscriptRecorderApp(QMainWindow):
         self._save_meeting_details(force=True)
         self.statusBar().showMessage("Meeting details saved")
         
-    def _set_status(self, text: str, color: str = "gray"):
-        """Update the status bar message."""
-        self.statusBar().showMessage(text)
+    def _set_status(self, text: str, state: str = ""):
+        """Update the status bar message with an optional visual state.
+
+        Parameters
+        ----------
+        text:
+            The message to display in the status label.
+        state:
+            One of ``"info"``, ``"warn"``, ``"error"``, or ``""`` (default /
+            neutral).  Controls the subtle background tint and border colour
+            defined in the QSS ``status_state`` selectors.
+        """
+        self._status_msg_label.setText(text)
+        self._status_msg_label.setProperty("status_state", state)
+        self._status_msg_label.style().unpolish(self._status_msg_label)
+        self._status_msg_label.style().polish(self._status_msg_label)
         
     def _show_about(self):
         """Show about dialog with GitHub repository link."""
