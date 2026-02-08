@@ -8,7 +8,7 @@ It can be auto-updated by build scripts.
 # Version components
 VERSION_MAJOR = 1
 VERSION_MINOR = 2
-VERSION_PATCH = 0
+VERSION_PATCH = 1
 
 # Full version string
 __version__ = f"{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_PATCH}"
