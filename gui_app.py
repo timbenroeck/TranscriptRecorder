@@ -2674,6 +2674,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Meeting Name
         name_layout = QHBoxLayout()
+        name_layout.setSpacing(4)
         name_label = QLabel("Meeting Name:")
         name_label.setFixedWidth(110)
         name_layout.addWidget(name_label)
@@ -3853,6 +3854,11 @@ class TranscriptRecorderApp(QMainWindow):
         # Meeting Details tab controls
         self.save_details_btn.setEnabled(has_session)
         self.open_folder_btn2.setEnabled(has_session)
+        
+        # Time rounding buttons — always enabled when session exists;
+        # they only modify the datetime text field, no accessibility needed
+        self.time_up_btn.setEnabled(has_session)
+        self.time_down_btn.setEnabled(has_session)
         
         # Meeting Tools tab controls
         has_tool = self.tool_combo.currentData() is not None
