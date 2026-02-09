@@ -58,8 +58,12 @@ _TINTS: dict[str, dict[bool, str]] = {
         False: "#C62828",
     },
     "warning": {
-        True:  "#D4B106",   # dark-mode  status_warn_text
-        False: "#856404",   # light-mode status_warn_text
+        True:  "#F0B400",   # dark-mode  Vibrant Amber
+        False: "#B78B00",   # light-mode Deep Gold
+    },
+    "danger_fill": {
+        True:  "#E57373",   # dark-mode  soft red on dark bg
+        False: "#C62828",   # light-mode deep red on light bg
     },
 }
 

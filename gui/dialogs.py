@@ -11,7 +11,7 @@ from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QFont, QPainter, QPain
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QTextEdit, QFileDialog,
+    QLabel, QPushButton, QTextEdit, QFileDialog, QFrame,
     QSizePolicy,
 )
 
@@ -257,15 +257,33 @@ class PermissionsDialog(QDialog):
         steps_layout.addWidget(step2)
 
         layout.addWidget(steps_widget)
-        layout.addSpacing(8)
+        layout.addSpacing(14)
 
-        # --- Restart note ---
-        note = QLabel("You may need to restart the app after granting permission.")
-        note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        note.setObjectName("secondary_label")
-        note.setStyleSheet("background: transparent;")
-        layout.addWidget(note)
-        layout.addSpacing(22)
+        # --- Restart info banner ---
+        banner = QFrame()
+        banner.setObjectName("info_banner")
+        banner_layout = QHBoxLayout(banner)
+        banner_layout.setContentsMargins(12, 10, 12, 10)
+        banner_layout.setSpacing(10)
+
+        info_icon_lbl = QLabel()
+        info_icon_lbl.setFixedSize(20, 20)
+        info_icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_pixmap = IconManager.get_pixmap(
+            "circle_alert", is_dark=is_dark, tint="primary", size=18,
+        )
+        info_icon_lbl.setPixmap(info_pixmap)
+        banner_layout.addWidget(info_icon_lbl)
+
+        banner_text = QLabel(
+            "You will need to <b>restart</b> the app after granting permission."
+        )
+        banner_text.setWordWrap(True)
+        banner_text.setStyleSheet("font-size: 12px;")
+        banner_layout.addWidget(banner_text, 1)
+
+        layout.addWidget(banner)
+        layout.addSpacing(18)
 
         # --- Buttons ---
         btn_layout = QHBoxLayout()
@@ -364,9 +382,9 @@ class ThemedMessageDialog(QDialog):
     _LEVEL_ICON: dict[str, tuple[str, str]] = {
         # level -> (icon_name, tint)
         "info":     ("circle_check", "primary"),
-        "warning":  ("circle_alert", "warning"),
+        "warning":  ("circle_alert", "danger_fill"),
         "critical": ("circle_x",     "danger"),
-        "question": ("circle_help",  "primary"),
+        "question": ("circle_help",  "warning"),
     }
 
     # ------------------------------------------------------------------
@@ -424,28 +442,29 @@ class ThemedMessageDialog(QDialog):
         content_row.setContentsMargins(0, 0, 0, 0)
 
         # Icon
+        _ICON_SIZE = 56
         icon_label = QLabel()
-        icon_label.setFixedSize(48, 48)
+        icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         icon_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         icon_label.setStyleSheet("background: transparent;")
 
         is_dark = self._detect_dark_mode()
 
         if level == "about":
-            pixmap = WelcomeDialog._render_app_icon(48)
+            pixmap = WelcomeDialog._render_app_icon(_ICON_SIZE)
             if pixmap and not pixmap.isNull():
                 icon_label.setPixmap(pixmap)
         else:
             icon_name, tint = self._LEVEL_ICON.get(level, ("circle_check", "primary"))
-            pixmap = IconManager.get_pixmap(icon_name, is_dark=is_dark, tint=tint, size=44)
+            pixmap = IconManager.get_pixmap(icon_name, is_dark=is_dark, tint=tint, size=_ICON_SIZE)
             icon_label.setPixmap(pixmap)
 
-        content_row.addWidget(icon_label)
+        content_row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
 
         # Text column
         text_col = QVBoxLayout()
         text_col.setSpacing(6)
-        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setContentsMargins(0, 2, 0, 0)
 
         title_label = QLabel(title)
         title_label.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")

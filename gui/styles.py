@@ -446,4 +446,15 @@ def get_application_stylesheet(is_dark: bool, combo_arrow_path: str = "") -> str
         QLabel#dialog_status[status_state="error"] {{
             color: {danger_red};
         }}
+
+        /* ========== Info Banner (used in dialogs for important notes) ========== */
+        QFrame#info_banner {{
+            background-color: {status_info_bg};
+            border: 1px solid {status_info_border};
+            border-radius: 6px;
+        }}
+        QFrame#info_banner QLabel {{
+            background-color: transparent;
+            color: {status_info_text};
+        }}
     """
