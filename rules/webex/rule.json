@@ -1,0 +1,45 @@
+{
+  "display_name": "WebEx",
+  "command_paths": [
+    "/Applications/Webex.app/Contents/MacOS/Webex"
+  ],
+  "rules_to_find_transcript_table": [
+    {
+      "path_name": "Captions Window Path",
+      "steps": [
+        {
+          "role": "AXWindow",
+          "description_contains": "Captions",
+          "search_scope": {
+            "levels_deep": 2
+          }
+        }
+      ]
+    },
+    {
+      "path_name": "Main Meeting Window Path",
+      "steps": [
+        {
+          "role": "AXTable",
+          "title_contains": "Captions",
+          "search_scope": {
+            "levels_deep": 5
+          }
+        }
+      ]
+    }
+  ],
+  "traversal_roles_to_skip": [
+    "AXButton"
+  ],
+  "traversal_mode": "dfs",
+  "exclude_pattern": "Row\\s*\\d+\\s*of\\s*\\d+",
+  "serialization_text_element_roles": {
+    "AXTextArea": "AXValue",
+    "AXStaticText": "AXValue",
+    "AXCell": "AXDescription"
+  },
+  "serialization_export_depth": 10,
+  "serialization_save_json": false,
+  "monitor_interval_seconds": 30
+}

@@ -1,0 +1,31 @@
+{
+  "display_name": "Slack",
+  "command_paths": [
+    "/Applications/Slack.app/Contents/MacOS/Slack"
+  ],
+  "rules_to_find_transcript_table": [
+    {
+      "path_name": "Main Meeting Window Path",
+      "steps": [
+        {
+          "role": "AXList",
+          "description_contains": "Transcript",
+          "search_scope": {
+            "levels_deep": 15
+          }
+        }
+      ]
+    }
+  ],
+  "traversal_roles_to_skip": [
+    "AXButton"
+  ],
+  "traversal_mode": "dfs",
+  "serialization_text_element_roles": {
+    "AXTextArea": "AXValue",
+    "AXStaticText": "AXValue"
+  },
+  "serialization_export_depth": 10,
+  "serialization_save_json": false,
+  "monitor_interval_seconds": 30
+}

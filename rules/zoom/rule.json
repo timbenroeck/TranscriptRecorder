@@ -1,0 +1,53 @@
+{
+  "display_name": "Zoom",
+  "command_paths": [
+    "/Applications/zoom.us.app/Contents/MacOS/zoom.us"
+  ],
+  "rules_to_find_transcript_table": [
+    {
+      "path_name": "Transcript Window Path",
+      "steps": [
+        {
+          "role": "AXWindow",
+          "title_matches_one_of": [
+            "Transcript"
+          ],
+          "search_scope": {
+            "levels_deep": 1
+          }
+        },
+        {
+          "role": "AXTable",
+          "description_contains": "Transcript list",
+          "search_scope": {
+            "levels_deep": 3
+          }
+        }
+      ]
+    },
+    {
+      "path_name": "Main Meeting Window Path",
+      "steps": [
+        {
+          "role": "AXTable",
+          "description_contains": "Transcript list",
+          "search_scope": {
+            "levels_deep": 4
+          }
+        }
+      ]
+    }
+  ],
+  "traversal_roles_to_skip": [
+    "AXButton"
+  ],
+  "traversal_mode": "bfs",
+  "incremental_export": true,
+  "serialization_text_element_roles": {
+    "AXTextArea": "AXValue",
+    "AXStaticText": "AXValue"
+  },
+  "serialization_export_depth": 5,
+  "serialization_save_json": false,
+  "monitor_interval_seconds": 30
+}
