@@ -289,12 +289,23 @@ Only sources explicitly listed in the `"sources"` array are included in the buil
 
 Transcript Recorder includes a built-in **Accessibility Inspector** (Sources > Accessibility Inspector) that helps you build `transcript_search_paths` without needing Xcode:
 
-1. **Select a running application** from the dropdown.
-2. **Browse the accessibility tree** — expand nodes to find the transcript element.
-3. **Click a node** to auto-generate a minimal search path that targets it.
-4. **Copy the generated JSON** and paste it into your `source.json`.
+1. **Select a running application** from the process list.
+2. **Browse the accessibility tree** — adjust the fetch depth and expand nodes to explore the UI structure.
+3. **Build search steps incrementally** — select a node (e.g. the transcript window) and click **Add Step** to add it to the search path. Then find the transcript table and add it as another step. Each step is calculated relative to the previous one.
+4. **Configure serialization settings** — switch to the **Test Export** tab to set the export depth, traversal mode (BFS/DFS), roles to skip, and text element roles (the mapping of AX roles to attributes like `AXTextArea → AXValue`).
+5. **Test the export** — click **Test Export** to run the full pipeline live: the inspector walks the configured steps to find the transcript element, then extracts text using your serialization settings. The results appear immediately so you can verify the output matches what you expect.
+6. **Copy the generated rule** — switch to the **Rule JSON** tab to see the complete `source.json` content, ready to copy and paste.
 
 The inspector also supports filtering by role and searching for elements containing specific text, which is useful for large accessibility trees.
+
+**Typical workflow for Zoom (example):**
+
+1. Fetch the tree at depth 3 — you'll see the `AXWindow "Transcript"` node.
+2. Select it and click **Add Step** → Step 1 is created.
+3. Find the `AXTable "Transcript list"` node and click **Add Step** → Step 2 is created.
+4. In the Test Export tab, set Export Depth to `5` (enough to reach `AXTextArea` and `AXStaticText` elements inside the table rows).
+5. Click **Test Export** — you should see speaker names and transcript text in the results.
+6. Copy the Rule JSON and save it as your `source.json`.
 
 ### Tips for Building Search Paths
 

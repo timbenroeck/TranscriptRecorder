@@ -156,6 +156,7 @@ A `source.json` defines:
 
 - **Sources → Import Sources...** — Download sources from the GitHub repository
 - **Sources → Edit Source...** — Open the visual Source Editor for any installed source
+- **Sources → Accessibility Inspector** — Interactive rule builder: browse the AX tree, add search steps, configure serialization, and test export live
 - **Sources → Set Current as Default** — Set the selected source as the startup default
 - **Sources → Open Sources Folder** — Open the sources directory in Finder
 - **Sources → Refresh Sources** — Rescan the sources directory
@@ -332,6 +333,7 @@ You can change the log level from **Maintenance → Log Level** without editing 
 |-----------|-------------|
 | **Import Sources...** | Download sources from the GitHub repository |
 | **Edit Source...** | Open the visual Source Editor for an installed source |
+| **Accessibility Inspector** | Interactive AX tree browser with step builder and test export |
 | **Set Current as Default** | Save the selected source as the startup default |
 | **Clear Default** | Remove the default source setting (falls back to Manual Recording) |
 | **Open Sources Folder** | Open the sources directory in Finder |
