@@ -1,6 +1,9 @@
 """
-Dialog windows for log viewing and first-launch welcome.
+Dialog windows for log viewing, first-launch welcome, and themed message boxes.
 """
+from __future__ import annotations
+
+from enum import IntEnum
 from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, QRectF, Qt, QUrl
@@ -8,7 +11,7 @@ from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QFont, QPainter, QPain
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QTextEdit, QMessageBox, QFileDialog,
+    QLabel, QPushButton, QTextEdit, QFileDialog,
     QSizePolicy,
 )
 
@@ -202,17 +205,8 @@ class PermissionsDialog(QDialog):
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 24)
+        layout.setContentsMargins(32, 24, 32, 24)
         layout.setSpacing(0)
-
-        # --- App icon ---
-        icon_label = QLabel()
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_pixmap = WelcomeDialog._render_app_icon(64)
-        if icon_pixmap and not icon_pixmap.isNull():
-            icon_label.setPixmap(icon_pixmap)
-        layout.addWidget(icon_label)
-        layout.addSpacing(14)
 
         # --- Heading ---
         heading = QLabel("Accessibility Permission Required")
@@ -336,6 +330,253 @@ class PermissionsDialog(QDialog):
         self.accept()
 
 
+class ThemedMessageDialog(QDialog):
+    """Modern, themed replacement for QMessageBox.
+
+    Provides a consistent Slate & Charcoal styled dialog with Lucide circle
+    icons for severity, word-wrapping message text, and buttons that follow
+    the application style guide.
+
+    Use the static convenience methods rather than instantiating directly:
+
+        ThemedMessageDialog.info(parent, "Title", "message")
+        ThemedMessageDialog.warning(parent, "Title", "message")
+        ThemedMessageDialog.critical(parent, "Title", "message")
+        if ThemedMessageDialog.question(parent, "Title", "question?"):
+            ...
+        result = ThemedMessageDialog.save_discard_cancel(parent, "Title", "msg")
+        ThemedMessageDialog.about(parent, "About", "<h3>App</h3>...")
+    """
+
+    # ------------------------------------------------------------------
+    # Result enum for save / discard / cancel
+    # ------------------------------------------------------------------
+
+    class Result(IntEnum):
+        CANCEL = 0
+        DISCARD = 1
+        SAVE = 2
+
+    # ------------------------------------------------------------------
+    # Icon / tint mapping per severity level
+    # ------------------------------------------------------------------
+
+    _LEVEL_ICON: dict[str, tuple[str, str]] = {
+        # level -> (icon_name, tint)
+        "info":     ("circle_check", "primary"),
+        "warning":  ("circle_alert", "warning"),
+        "critical": ("circle_x",     "danger"),
+        "question": ("circle_help",  "primary"),
+    }
+
+    # ------------------------------------------------------------------
+    # Constructor (prefer the static helpers below)
+    # ------------------------------------------------------------------
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        title: str,
+        message: str,
+        level: str = "info",
+        buttons: list[tuple[str, str, str | None]] | None = None,
+        *,
+        rich: bool = False,
+    ):
+        """Create a themed message dialog.
+
+        Parameters
+        ----------
+        parent:
+            Parent widget.
+        title:
+            Bold heading displayed in the dialog.
+        message:
+            Body text (word-wrapped automatically). If *rich* is True the
+            text is rendered as HTML.
+        level:
+            One of ``"info"``, ``"warning"``, ``"critical"``, ``"question"``,
+            or ``"about"`` (uses the app icon).
+        buttons:
+            List of ``(label, class_name_or_empty, result_key)`` tuples.
+            *class_name_or_empty* maps to the QSS ``class`` property
+            (e.g. ``"primary"``, ``""`` for default).  *result_key* is
+            stored on the button and returned by :pymethod:`exec` as the
+            dialog's ``result()`` value.  The **last** button in the list
+            is made the default / focused button.
+        rich:
+            If True, render *message* as HTML.
+        """
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setFixedWidth(460)
+        self.setModal(True)
+
+        self._result_value: int = 0
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 20)
+        outer.setSpacing(0)
+
+        # --- Content row: icon | title + message ---
+        content_row = QHBoxLayout()
+        content_row.setSpacing(16)
+        content_row.setContentsMargins(0, 0, 0, 0)
+
+        # Icon
+        icon_label = QLabel()
+        icon_label.setFixedSize(48, 48)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        icon_label.setStyleSheet("background: transparent;")
+
+        is_dark = self._detect_dark_mode()
+
+        if level == "about":
+            pixmap = WelcomeDialog._render_app_icon(48)
+            if pixmap and not pixmap.isNull():
+                icon_label.setPixmap(pixmap)
+        else:
+            icon_name, tint = self._LEVEL_ICON.get(level, ("circle_check", "primary"))
+            pixmap = IconManager.get_pixmap(icon_name, is_dark=is_dark, tint=tint, size=44)
+            icon_label.setPixmap(pixmap)
+
+        content_row.addWidget(icon_label)
+
+        # Text column
+        text_col = QVBoxLayout()
+        text_col.setSpacing(6)
+        text_col.setContentsMargins(0, 0, 0, 0)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
+        title_label.setWordWrap(True)
+        text_col.addWidget(title_label)
+
+        msg_label = QLabel(message)
+        msg_label.setWordWrap(True)
+        msg_label.setStyleSheet("font-size: 13px; background: transparent;")
+        if rich:
+            msg_label.setTextFormat(Qt.TextFormat.RichText)
+            msg_label.setOpenExternalLinks(True)
+        text_col.addWidget(msg_label)
+
+        text_col.addStretch()
+        content_row.addLayout(text_col, 1)
+
+        outer.addLayout(content_row)
+        outer.addSpacing(20)
+
+        # --- Buttons ---
+        if buttons is None:
+            buttons = [("OK", "primary", None)]
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        btn_layout.addStretch()
+
+        last_btn: QPushButton | None = None
+        for idx, (label, cls_name, _result_key) in enumerate(buttons):
+            btn = QPushButton(label)
+            if cls_name:
+                btn.setProperty("class", cls_name)
+            btn.setMinimumWidth(80)
+            # Store the index so we can retrieve the result
+            btn.clicked.connect(lambda checked=False, i=idx: self._on_button(i))
+            btn_layout.addWidget(btn)
+            last_btn = btn
+
+        if last_btn is not None:
+            last_btn.setDefault(True)
+            last_btn.setFocus()
+
+        outer.addLayout(btn_layout)
+        self._buttons_spec = buttons
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_dark_mode() -> bool:
+        """Return True if the application is currently in dark mode."""
+        palette = QApplication.palette()
+        return palette.window().color().lightness() < 128
+
+    def _on_button(self, index: int):
+        self._result_value = index
+        self.accept()
+
+    # ------------------------------------------------------------------
+    # Static convenience methods
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def info(parent: QWidget | None, title: str, message: str) -> None:
+        """Show an informational dialog with an OK button."""
+        dlg = ThemedMessageDialog(
+            parent, title, message, level="info",
+            buttons=[("OK", "primary", None)],
+        )
+        dlg.exec()
+
+    @staticmethod
+    def warning(parent: QWidget | None, title: str, message: str) -> None:
+        """Show a warning dialog with an OK button."""
+        dlg = ThemedMessageDialog(
+            parent, title, message, level="warning",
+            buttons=[("OK", "primary", None)],
+        )
+        dlg.exec()
+
+    @staticmethod
+    def critical(parent: QWidget | None, title: str, message: str) -> None:
+        """Show a critical/error dialog with an OK button."""
+        dlg = ThemedMessageDialog(
+            parent, title, message, level="critical",
+            buttons=[("OK", "primary", None)],
+        )
+        dlg.exec()
+
+    @staticmethod
+    def question(parent: QWidget | None, title: str, message: str) -> bool:
+        """Show a Yes/No question dialog. Returns True if the user chose Yes."""
+        dlg = ThemedMessageDialog(
+            parent, title, message, level="question",
+            buttons=[
+                ("No", "", "no"),
+                ("Yes", "primary", "yes"),
+            ],
+        )
+        dlg.exec()
+        return dlg._result_value == 1  # index of "Yes"
+
+    @staticmethod
+    def save_discard_cancel(
+        parent: QWidget | None, title: str, message: str,
+    ) -> "ThemedMessageDialog.Result":
+        """Show a Save / Discard / Cancel dialog. Returns a Result enum."""
+        dlg = ThemedMessageDialog(
+            parent, title, message, level="warning",
+            buttons=[
+                ("Cancel", "", "cancel"),
+                ("Discard", "danger-outline", "discard"),
+                ("Save", "primary", "save"),
+            ],
+        )
+        dlg.exec()
+        return ThemedMessageDialog.Result(dlg._result_value)
+
+    @staticmethod
+    def about(parent: QWidget | None, title: str, html: str) -> None:
+        """Show an About dialog with the app icon and rich HTML body."""
+        dlg = ThemedMessageDialog(
+            parent, title, html, level="about",
+            buttons=[("OK", "primary", None)],
+            rich=True,
+        )
+        dlg.exec()
+
+
 class LogViewerDialog(QMainWindow):
     """A window for viewing the application log file."""
     
@@ -416,19 +657,17 @@ class LogViewerDialog(QMainWindow):
         if log_path is None:
             return
             
-        reply = QMessageBox.question(
+        if not ThemedMessageDialog.question(
             self, "Clear Log",
-            "Are you sure you want to clear the log file?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                if log_path.exists():
-                    with open(log_path, 'w', encoding='utf-8') as f:
-                        f.write("")
-                    self._load_log()
-                    logger.info("Log viewer: log file cleared by user")
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to clear log file: {e}")
+            "Are you sure you want to clear the log file?"
+        ):
+            return
+        try:
+            if log_path.exists():
+                with open(log_path, 'w', encoding='utf-8') as f:
+                    f.write("")
+                self._load_log()
+                logger.info("Log viewer: log file cleared by user")
+        except Exception as e:
+            ThemedMessageDialog.warning(self, "Error", f"Failed to clear log file: {e}")
 

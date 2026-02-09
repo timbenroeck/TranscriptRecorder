@@ -9,11 +9,12 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QMessageBox, QStackedWidget, QTextEdit,
+    QLabel, QPushButton, QStackedWidget, QTextEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 
 from gui.constants import logger
+from gui.dialogs import ThemedMessageDialog
 
 
 class BaseDataEditor(QWidget):
@@ -163,13 +164,10 @@ class KeyArrayGridEditor(BaseDataEditor):
             return
         key_item = self.table.item(row, 0)
         key_text = key_item.text() if key_item else "(empty)"
-        reply = QMessageBox.question(
+        if ThemedMessageDialog.question(
             self, "Delete Row",
-            f"Delete row \"{key_text}\"?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+            f'Delete row "{key_text}"?'
+        ):
             self.table.removeRow(row)
             self._is_modified = True
             self.modified.emit()
@@ -288,13 +286,10 @@ class KeyValueGridEditor(BaseDataEditor):
             return
         key_item = self.table.item(row, 0)
         key_text = key_item.text() if key_item else "(empty)"
-        reply = QMessageBox.question(
+        if ThemedMessageDialog.question(
             self, "Delete Row",
-            f"Delete row \"{key_text}\"?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+            f'Delete row "{key_text}"?'
+        ):
             self.table.removeRow(row)
             self._is_modified = True
             self.modified.emit()
@@ -413,13 +408,10 @@ class StringListEditor(BaseDataEditor):
             return
         item = self.table.item(row, 0)
         text = item.text() if item else "(empty)"
-        reply = QMessageBox.question(
+        if ThemedMessageDialog.question(
             self, "Delete Item",
-            f"Delete \"{text}\"?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+            f'Delete "{text}"?'
+        ):
             self.table.removeRow(row)
             self._is_modified = True
             self.modified.emit()
@@ -578,7 +570,7 @@ class DataFileEditorDialog(QMainWindow):
                 self._code_loading = False
                 self._code_modified = self.editor.is_modified()
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to serialize data:\n{e}")
+                ThemedMessageDialog.warning(self, "Error", f"Failed to serialize data: {e}")
                 return
         else:
             # Code -> Editor: parse JSON and load into structured editor
@@ -586,10 +578,10 @@ class DataFileEditorDialog(QMainWindow):
             try:
                 data = json.loads(text)
             except json.JSONDecodeError as e:
-                QMessageBox.warning(
+                ThemedMessageDialog.warning(
                     self, "Invalid JSON",
-                    f"Cannot switch to Editor view — the JSON is invalid:\n\n{e}\n\n"
-                    f"Fix the JSON errors or use Reload to discard changes."
+                    f"Cannot switch to Editor view — the JSON is invalid: {e}. "
+                    "Fix the JSON errors or use Reload to discard changes."
                 )
                 return
 
@@ -642,13 +634,10 @@ class DataFileEditorDialog(QMainWindow):
 
     def _reload(self):
         if self._is_any_modified():
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self, "Unsaved Changes",
-                "You have unsaved changes. Reload and discard them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
+                "You have unsaved changes. Reload and discard them?"
+            ):
                 return
 
         if self._current_view == self._VIEW_EDITOR:
@@ -696,9 +685,9 @@ class DataFileEditorDialog(QMainWindow):
                 data = json.loads(text)
             except json.JSONDecodeError as e:
                 self._set_status(f"✗ Invalid JSON: {e}", "error")
-                QMessageBox.warning(
+                ThemedMessageDialog.warning(
                     self, "Invalid JSON",
-                    f"Cannot save — the JSON is invalid:\n\n{e}"
+                    f"Cannot save — the JSON is invalid: {e}"
                 )
                 return
 
@@ -722,13 +711,10 @@ class DataFileEditorDialog(QMainWindow):
 
     def closeEvent(self, event):
         if self._is_any_modified():
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self, "Unsaved Changes",
-                "You have unsaved changes. Close without saving?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
+                "You have unsaved changes. Close without saving?"
+            ):
                 event.ignore()
                 return
         event.accept()

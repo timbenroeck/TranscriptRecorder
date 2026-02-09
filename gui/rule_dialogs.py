@@ -7,12 +7,13 @@ from typing import List, Optional
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QMessageBox, QLineEdit,
+    QLabel, QPushButton, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QCheckBox,
 )
 
 from gui.constants import APP_NAME, APP_VERSION, logger
+from gui.dialogs import ThemedMessageDialog
 from gui.versioning import read_stored_hash
 from gui.workers import RuleFetchWorker
 from version import GITHUB_OWNER, GITHUB_REPO
@@ -235,10 +236,10 @@ class RuleImportDialog(QMainWindow):
         self.install_btn.setEnabled(True)
 
         if errors:
-            error_text = "\n".join(errors)
-            QMessageBox.warning(
+            error_text = ", ".join(errors)
+            ThemedMessageDialog.warning(
                 self, "Import Errors",
-                f"Some rules failed to install:\n\n{error_text}"
+                f"Some rules failed to install: {error_text}"
             )
 
         if installed:
@@ -250,24 +251,24 @@ class RuleImportDialog(QMainWindow):
                 rule_dir = self._local_rules_dir / n
                 backups = sorted(rule_dir.glob("rule.json.bak.*"))
                 if backups:
-                    backup_files.append(f"  {n}/{backups[-1].name}")
+                    backup_files.append(f"{n}/{backups[-1].name}")
 
             backup_note = ""
             if backup_files:
-                backup_list = "\n".join(backup_files)
+                backup_list = ", ".join(backup_files)
                 backup_note = (
-                    f"\n\nYour previous rule.json file(s) have been backed up:\n"
-                    f"{backup_list}\n\n"
+                    f" Your previous rule.json file(s) have been backed up: "
+                    f"{backup_list}. "
                     f"Please review any custom settings (e.g. command_paths) "
                     f"and re-apply them if needed."
                 )
 
             msg = (
-                f"Successfully installed: {names}\n\n"
+                f"Successfully installed: {names}. "
                 f"Please review the rules, especially command_paths, to ensure "
                 f"they match your system.{backup_note}"
             )
-            QMessageBox.information(self, "Rules Installed", msg)
+            ThemedMessageDialog.info(self, "Rules Installed", msg)
             self.rules_imported.emit()
 
             self._set_status(f"Installed {len(installed)} rule(s)", "success")

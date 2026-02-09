@@ -20,7 +20,7 @@ from PyQt6.QtGui import QAction, QActionGroup, QFont, QIcon, QPalette, QColor
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QPushButton, QTextEdit, QProgressBar,
-    QMessageBox, QFileDialog, QStatusBar, QGroupBox, QSpinBox,
+    QFileDialog, QStatusBar, QGroupBox, QSpinBox,
     QSplitter, QFrame, QSizePolicy, QSystemTrayIcon, QMenu,
     QTabWidget, QLineEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QCheckBox, QInputDialog, QDialog,
@@ -43,7 +43,7 @@ from gui.workers import (
     UpdateCheckWorker, ToolFetchWorker,
     STREAM_PARSERS, _stream_parser_raw,
 )
-from gui.dialogs import LogViewerDialog, PermissionsDialog, WelcomeDialog
+from gui.dialogs import LogViewerDialog, PermissionsDialog, ThemedMessageDialog, WelcomeDialog
 from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
 from gui.data_editors import DataFileEditorDialog
 
@@ -981,9 +981,9 @@ class TranscriptRecorderApp(QMainWindow):
                 # First-run: copy the bundled default config to App Support
                 bundled_config = resource_path("config.json")
                 if not bundled_config.exists():
-                    QMessageBox.critical(
+                    ThemedMessageDialog.critical(
                         self, "Missing Configuration",
-                        "Could not find the bundled configuration file.\n"
+                        "Could not find the bundled configuration file. "
                         "Please reinstall the application."
                     )
                     self._closing = True
@@ -1036,14 +1036,14 @@ class TranscriptRecorderApp(QMainWindow):
             self.statusBar().showMessage("Configuration loaded")
             
         except json.JSONDecodeError as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Configuration Error",
-                f"Invalid configuration file:\n{e}"
+                f"Invalid configuration file: {e}"
             )
         except Exception as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Configuration Error",
-                f"Failed to load configuration:\n{e}"
+                f"Failed to load configuration: {e}"
             )
             logger.error(f"Config load error: {e}", exc_info=True)
     
@@ -1217,7 +1217,7 @@ class TranscriptRecorderApp(QMainWindow):
         """Save the currently selected rule as the default in config."""
         current_key = self.app_combo.currentData()
         if not current_key:
-            QMessageBox.information(self, "No Rule Selected", "Please select a rule first.")
+            ThemedMessageDialog.info(self, "No Rule Selected", "Please select a rule first.")
             return
         
         display_name = self.app_combo.currentText()
@@ -1238,7 +1238,7 @@ class TranscriptRecorderApp(QMainWindow):
             logger.info(f"Config: default_rule set to '{current_key}' ({display_name})")
         except Exception as e:
             logger.error(f"Config: failed to save default_rule: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save default rule:\n{e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to save default rule: {e}")
     
     def _on_clear_default_rule(self):
         """Clear the default rule setting from config."""
@@ -1258,7 +1258,7 @@ class TranscriptRecorderApp(QMainWindow):
             logger.info("Config: default_rule cleared")
         except Exception as e:
             logger.error(f"Config: failed to clear default_rule: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to clear default rule:\n{e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to clear default rule: {e}")
             
     def _check_permissions(self):
         """Check and warn about accessibility permissions."""
@@ -1277,12 +1277,12 @@ class TranscriptRecorderApp(QMainWindow):
             
     def _on_startup_update_available(self, version: str, release_url: str, notes: str, assets: list):
         """Handle notification that a new version is available (from background check)."""
-        QMessageBox.information(
+        ThemedMessageDialog.info(
             self,
             "Update Available",
-            f"A new version of {APP_NAME} is available!\n\n"
-            f"Current version: {APP_VERSION}\n"
-            f"Latest version: {version}\n\n"
+            f"A new version of {APP_NAME} is available! "
+            f"Current version: {APP_VERSION}. "
+            f"Latest version: {version}. "
             f"You can download it from the Maintenance menu → Check for Updates."
         )
     
@@ -1308,13 +1308,13 @@ class TranscriptRecorderApp(QMainWindow):
         """
         if not self.selected_app_key or not self._discovered_rules:
             logger.warning("New session: no application selected")
-            QMessageBox.warning(self, "No Application", "Please select a meeting application first.")
+            ThemedMessageDialog.warning(self, "No Application", "Please select a meeting application first.")
             return
             
         app_config = self._discovered_rules.get(self.selected_app_key, {})
         if not app_config:
             logger.error(f"New session: no rule found for {self.selected_app_key}")
-            QMessageBox.warning(self, "Rule Error", f"No rule found for {self.selected_app_key}")
+            ThemedMessageDialog.warning(self, "Rule Error", f"No rule found for {self.selected_app_key}")
             return
             
         # Reset state
@@ -1373,7 +1373,7 @@ class TranscriptRecorderApp(QMainWindow):
             self.recorder_instance = TranscriptRecorder(app_config=tr_config, logger=logger)
         except Exception as e:
             logger.error(f"New session: failed to initialize recorder: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Failed to initialize recorder:\n{e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to initialize recorder: {e}")
             return
             
         # Update UI
@@ -1410,15 +1410,11 @@ class TranscriptRecorderApp(QMainWindow):
     def _on_reset_recording(self):
         """Reset the current recording session."""
         if self.is_recording:
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self, "Auto Capture Running",
                 "Auto capture is currently running. Resetting will stop "
-                "the capture and clear the current recording.\n\n"
-                "Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+                "the capture and clear the current recording. Continue?"
+            ):
                 return
             self._on_stop_recording()
 
@@ -1482,7 +1478,7 @@ class TranscriptRecorderApp(QMainWindow):
             return False
         
         if not self.selected_app_key or not self._discovered_rules:
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "No Application Selected",
                 "Please select a meeting application before capturing."
             )
@@ -1490,7 +1486,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         app_config = self._discovered_rules.get(self.selected_app_key, {})
         if not app_config:
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Rule Error",
                 f"No rule found for {self.selected_app_key}"
             )
@@ -1507,7 +1503,7 @@ class TranscriptRecorderApp(QMainWindow):
             self.recorder_instance = TranscriptRecorder(app_config=tr_config, logger=logger)
         except Exception as e:
             logger.error(f"Failed to create recorder for loaded session: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Failed to initialize recorder:\n{e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to initialize recorder: {e}")
             return False
         
         logger.info(f"Recorder created on-demand for loaded session: {self.selected_app_key}")
@@ -1567,19 +1563,15 @@ class TranscriptRecorderApp(QMainWindow):
         """Take a manual snapshot and merge into meeting transcript."""
         # If transcript is in edit mode with unsaved changes, warn the user
         if self._transcript_edit_mode and self._transcript_modified:
-            reply = QMessageBox.warning(
+            result = ThemedMessageDialog.save_discard_cancel(
                 self, "Unsaved Transcript Changes",
                 "You have unsaved transcript edits. Capturing will overwrite "
-                "the display with the merged result.\n\n"
-                "Save your edits first, or discard them?",
-                QMessageBox.StandardButton.Save
-                | QMessageBox.StandardButton.Discard
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Save,
+                "the display with the merged result. "
+                "Save your edits first, or discard them?"
             )
-            if reply == QMessageBox.StandardButton.Cancel:
+            if result == ThemedMessageDialog.Result.CANCEL:
                 return
-            if reply == QMessageBox.StandardButton.Save:
+            if result == ThemedMessageDialog.Result.SAVE:
                 self._on_save_transcript_clicked()
         self._do_capture_and_merge(auto=False)
     
@@ -1595,7 +1587,7 @@ class TranscriptRecorderApp(QMainWindow):
             return True
         except OSError as e:
             logger.error(f"Failed to create recording folder: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to create recording folder:\n{e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to create recording folder: {e}")
             return False
     
     def _do_capture_and_merge(self, auto: bool = False):
@@ -1673,18 +1665,17 @@ class TranscriptRecorderApp(QMainWindow):
             else:
                 logger.warning(f"{source} capture: no transcript data returned")
                 if not auto:
-                    QMessageBox.warning(
+                    ThemedMessageDialog.warning(
                         self, "Capture Failed",
-                        "Could not capture transcript. Make sure:\n"
-                        "• The meeting application is running\n"
-                        "• Captions/transcript is enabled\n"
-                        "• The transcript window is visible"
+                        "Could not capture transcript. Make sure the meeting "
+                        "application is running, captions/transcript is enabled, "
+                        "and the transcript window is visible."
                     )
                 self._set_status("Capture failed", "error")
         except Exception as e:
             logger.error(f"{source} capture failed: {e}", exc_info=True)
             if not auto:
-                QMessageBox.critical(self, "Error", f"Capture failed:\n{e}")
+                ThemedMessageDialog.critical(self, "Error", f"Capture failed: {e}")
             self._set_status("Error", "error")
         finally:
             loop.close()
@@ -1771,25 +1762,21 @@ class TranscriptRecorderApp(QMainWindow):
 
         # Guard: do not allow editing while auto-capture is running
         if self.is_recording:
-            QMessageBox.information(
+            ThemedMessageDialog.info(
                 self, "Editing Unavailable",
-                "Cannot edit the transcript while auto capture is running.\n\n"
+                "Cannot edit the transcript while auto capture is running. "
                 "Stop auto capture first, then enable editing."
             )
             return
 
         # Non-manual, non-history active session — warn about merge conflicts
         if not self._is_manual_mode and not self._is_history_session and self.recorder_instance is not None:
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self, "Enable Editing",
-                "Is the meeting over?\n\n"
-                "Editing the transcript while captures are still possible "
-                "could cause merge conflicts with future captures.\n\n"
-                "Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+                "Is the meeting over? Editing the transcript while captures "
+                "are still possible could cause merge conflicts with future "
+                "captures. Continue?"
+            ):
                 return
 
         # Enable editing
@@ -1827,7 +1814,7 @@ class TranscriptRecorderApp(QMainWindow):
             logger.info(f"Transcript saved ({line_count} lines)")
         except OSError as e:
             logger.error(f"Failed to save transcript: {e}")
-            QMessageBox.warning(self, "Save Error", f"Failed to save transcript:\n{e}")
+            ThemedMessageDialog.warning(self, "Save Error", f"Failed to save transcript: {e}")
 
     def _update_edit_button_icon(self):
         """Update the edit transcript button icon based on current state."""
@@ -1851,18 +1838,14 @@ class TranscriptRecorderApp(QMainWindow):
         if not self._transcript_modified:
             return True
 
-        reply = QMessageBox.warning(
+        result = ThemedMessageDialog.save_discard_cancel(
             self, "Unsaved Transcript Changes",
-            "You have unsaved changes to the transcript.\n\n"
-            "Would you like to save before continuing?",
-            QMessageBox.StandardButton.Save
-            | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save,
+            "You have unsaved changes to the transcript. "
+            "Would you like to save before continuing?"
         )
-        if reply == QMessageBox.StandardButton.Cancel:
+        if result == ThemedMessageDialog.Result.CANCEL:
             return False
-        if reply == QMessageBox.StandardButton.Save:
+        if result == ThemedMessageDialog.Result.SAVE:
             self._on_save_transcript_clicked()
         return True
 
@@ -1900,7 +1883,7 @@ class TranscriptRecorderApp(QMainWindow):
             Path(path).write_text(text, encoding="utf-8")
             self.statusBar().showMessage(f"Output saved to {path}")
         except OSError as e:
-            QMessageBox.warning(self, "Save Error", f"Could not save file:\n{e}")
+            ThemedMessageDialog.warning(self, "Save Error", f"Could not save file: {e}")
     
     def _on_copy_transcript(self):
         """Copy transcript to clipboard."""
@@ -1959,10 +1942,10 @@ class TranscriptRecorderApp(QMainWindow):
         has_details = (selected_path / "meeting_details.txt").exists()
         
         if not has_transcript and not has_details:
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Invalid Recording Folder",
                 "The selected folder does not contain a meeting_transcript.txt "
-                "or meeting_details.txt file.\n\n"
+                "or meeting_details.txt file. "
                 "Please select a valid recording folder."
             )
             return
@@ -2943,7 +2926,7 @@ class TranscriptRecorderApp(QMainWindow):
     def _show_about(self):
         """Show about dialog with GitHub repository link."""
         github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
-        QMessageBox.about(
+        ThemedMessageDialog.about(
             self,
             f"About {APP_NAME}",
             f"<h3>{APP_NAME}</h3>"
@@ -3026,9 +3009,9 @@ class TranscriptRecorderApp(QMainWindow):
             self.statusBar().showMessage(f"Privacy default set to: {label}")
             logger.info(f"Privacy default saved: screen_sharing_hidden={new_hidden}")
         except Exception as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Error",
-                f"Failed to save privacy default:\n{e}"
+                f"Failed to save privacy default: {e}"
             )
     
     def _show_log_viewer(self):
@@ -3048,7 +3031,7 @@ class TranscriptRecorderApp(QMainWindow):
         """Open the tool.json editor for a selected tool."""
         tools_dir = self.export_base_dir / "tools"
         if not tools_dir.exists():
-            QMessageBox.information(self, "No Tools", "No tools directory found.")
+            ThemedMessageDialog.info(self, "No Tools", "No tools directory found.")
             return
 
         tool_dirs = sorted(
@@ -3057,9 +3040,9 @@ class TranscriptRecorderApp(QMainWindow):
         )
 
         if not tool_dirs:
-            QMessageBox.information(
+            ThemedMessageDialog.info(
                 self, "No Tools",
-                "No tools with a tool.json file were found.\n\n"
+                "No tools with a tool.json file were found. "
                 "Use Tools > Import Tools to install tools first."
             )
             return
@@ -3100,10 +3083,10 @@ class TranscriptRecorderApp(QMainWindow):
                 all_data_files.append((display, file_path, editor_type, label, tool_name))
 
         if not all_data_files:
-            QMessageBox.information(
+            ThemedMessageDialog.info(
                 self, "No Data Files",
-                "No tools with editable data files were found.\n\n"
-                "Tools can declare editable data files by adding a\n"
+                "No tools with editable data files were found. "
+                "Tools can declare editable data files by adding a "
                 "\"data_files\" section to their tool.json."
             )
             return
@@ -3148,7 +3131,7 @@ class TranscriptRecorderApp(QMainWindow):
         from gui.rule_editor import RuleEditorDialog
         rules_dir = self.export_base_dir / "rules"
         if not rules_dir.exists():
-            QMessageBox.information(self, "No Rules", "No rules directory found.")
+            ThemedMessageDialog.info(self, "No Rules", "No rules directory found.")
             return
 
         rule_dirs = sorted(
@@ -3157,9 +3140,9 @@ class TranscriptRecorderApp(QMainWindow):
         )
 
         if not rule_dirs:
-            QMessageBox.information(
+            ThemedMessageDialog.info(
                 self, "No Rules",
-                "No rules with a rule.json file were found.\n\n"
+                "No rules with a rule.json file were found. "
                 "Use Rules > Import Rules to install rules first."
             )
             return
@@ -3210,7 +3193,7 @@ class TranscriptRecorderApp(QMainWindow):
             if not export_dir:
                 export_dir = self._prompt_for_export_directory()
                 if not export_dir:
-                    QMessageBox.warning(
+                    ThemedMessageDialog.warning(
                         self, "Export Directory Required",
                         "No export directory is configured. Some features may not work."
                     )
@@ -3228,14 +3211,14 @@ class TranscriptRecorderApp(QMainWindow):
             self.statusBar().showMessage("Configuration reloaded")
             
         except json.JSONDecodeError as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Configuration Error",
-                f"Invalid JSON in configuration file:\n{e}"
+                f"Invalid JSON in configuration file: {e}"
             )
         except Exception as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Configuration Error",
-                f"Failed to reload configuration:\n{e}"
+                f"Failed to reload configuration: {e}"
             )
     
     def _prompt_for_export_directory(self) -> Optional[str]:
@@ -3302,9 +3285,9 @@ class TranscriptRecorderApp(QMainWindow):
             self.statusBar().showMessage(f"Export directory changed to {new_dir}")
             
         except Exception as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Error",
-                f"Failed to update export directory:\n{e}"
+                f"Failed to update export directory: {e}"
             )
     
     def _set_log_level(self, level_name: str):
@@ -3365,77 +3348,73 @@ class TranscriptRecorderApp(QMainWindow):
                 logger.info(f"Default log level saved: {item}")
                 self.statusBar().showMessage(f"Default log level set to: {item}")
         except Exception as e:
-            QMessageBox.critical(
+            ThemedMessageDialog.critical(
                 self, "Error",
-                f"Failed to save log level default:\n{e}"
+                f"Failed to save log level default: {e}"
             )
 
     def _clear_log_file(self):
         """Clear the log file."""
         if _constants.current_log_file_path is None:
-            QMessageBox.information(self, "Logging Disabled", "File logging is disabled in configuration.")
+            ThemedMessageDialog.info(self, "Logging Disabled", "File logging is disabled in configuration.")
             return
             
-        reply = QMessageBox.question(
+        if not ThemedMessageDialog.question(
             self, "Clear Log File",
-            "Are you sure you want to clear the log file?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                if _constants.current_log_file_path.exists():
-                    with open(_constants.current_log_file_path, 'w', encoding='utf-8') as f:
-                        f.write("")
-                    logger.info("Maintenance: log file cleared")
-                    self.statusBar().showMessage("Log file cleared")
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to clear log file: {e}")
+            "Are you sure you want to clear the log file?"
+        ):
+            return
+        try:
+            if _constants.current_log_file_path.exists():
+                with open(_constants.current_log_file_path, 'w', encoding='utf-8') as f:
+                    f.write("")
+                logger.info("Maintenance: log file cleared")
+                self.statusBar().showMessage("Log file cleared")
+        except Exception as e:
+            ThemedMessageDialog.warning(self, "Error", f"Failed to clear log file: {e}")
     
     def _clear_all_snapshots(self):
         """Remove all .snapshots folders from recordings."""
         recordings_dir = self.export_base_dir / "recordings"
         
         if not recordings_dir.exists():
-            QMessageBox.information(self, "No Recordings", "No recordings folder found.")
+            ThemedMessageDialog.info(self, "No Recordings", "No recordings folder found.")
             return
         
         snapshots_folders = list(recordings_dir.glob("**/.snapshots"))
         
         if not snapshots_folders:
-            QMessageBox.information(self, "No Snapshots", "No snapshot folders found to clear.")
+            ThemedMessageDialog.info(self, "No Snapshots", "No snapshot folders found to clear.")
             return
         
-        reply = QMessageBox.question(
+        if not ThemedMessageDialog.question(
             self, "Clear All Snapshots",
-            f"This will remove {len(snapshots_folders)} snapshot folder(s) from your recordings.\n\n"
-            "The merged transcripts (meeting_transcript.txt) will be preserved.\n\n"
-            "This action cannot be undone. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+            f"This will remove {len(snapshots_folders)} snapshot folder(s) from your recordings. "
+            "The merged transcripts (meeting_transcript.txt) will be preserved. "
+            "This action cannot be undone. Continue?"
+        ):
+            return
+
+        removed = 0
+        errors = 0
+        for folder in snapshots_folders:
+            try:
+                shutil.rmtree(folder)
+                removed += 1
+            except Exception as e:
+                logger.error(f"Maintenance: failed to remove snapshot folder {folder}: {e}")
+                errors += 1
         
-        if reply == QMessageBox.StandardButton.Yes:
-            removed = 0
-            errors = 0
-            for folder in snapshots_folders:
-                try:
-                    shutil.rmtree(folder)
-                    removed += 1
-                except Exception as e:
-                    logger.error(f"Maintenance: failed to remove snapshot folder {folder}: {e}")
-                    errors += 1
-            
-            if errors > 0:
-                QMessageBox.warning(
-                    self, "Partial Success",
-                    f"Removed {removed} snapshot folder(s).\n{errors} folder(s) could not be removed."
-                )
-            else:
-                QMessageBox.information(
-                    self, "Success",
-                    f"Removed {removed} snapshot folder(s)."
-                )
+        if errors > 0:
+            ThemedMessageDialog.warning(
+                self, "Partial Success",
+                f"Removed {removed} snapshot folder(s). {errors} folder(s) could not be removed."
+            )
+        else:
+            ThemedMessageDialog.info(
+                self, "Success",
+                f"Removed {removed} snapshot folder(s)."
+            )
             
             logger.info(f"Maintenance: cleared {removed} snapshot folders ({errors} errors)")
             self.statusBar().showMessage(f"Cleared {removed} snapshot folders")
@@ -3445,7 +3424,7 @@ class TranscriptRecorderApp(QMainWindow):
         recordings_dir = self.export_base_dir / "recordings"
         
         if not recordings_dir.exists():
-            QMessageBox.information(self, "No Recordings", "No recordings folder found.")
+            ThemedMessageDialog.info(self, "No Recordings", "No recordings folder found.")
             return
         
         empty_folders: List[Path] = []
@@ -3459,43 +3438,42 @@ class TranscriptRecorderApp(QMainWindow):
                 empty_folders.append(folder)
         
         if not empty_folders:
-            QMessageBox.information(
+            ThemedMessageDialog.info(
                 self, "No Empty Recordings",
                 "No empty recording folders found."
             )
             return
         
-        reply = QMessageBox.question(
+        folder_list = ", ".join(f.name for f in empty_folders[:10])
+        if len(empty_folders) > 10:
+            folder_list += ", ..."
+        if not ThemedMessageDialog.question(
             self, "Clear Empty Recordings",
-            f"Found {len(empty_folders)} empty recording folder(s):\n\n"
-            + "\n".join(f"  • {f.name}" for f in empty_folders[:10])
-            + ("\n  ..." if len(empty_folders) > 10 else "")
-            + "\n\nThese folders contain no files. Remove them?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+            f"Found {len(empty_folders)} empty recording folder(s): {folder_list}. "
+            "These folders contain no files. Remove them?"
+        ):
+            return
+
+        removed = 0
+        errors = 0
+        for folder in empty_folders:
+            try:
+                shutil.rmtree(folder)
+                removed += 1
+            except Exception as e:
+                logger.error(f"Maintenance: failed to remove empty folder {folder}: {e}")
+                errors += 1
         
-        if reply == QMessageBox.StandardButton.Yes:
-            removed = 0
-            errors = 0
-            for folder in empty_folders:
-                try:
-                    shutil.rmtree(folder)
-                    removed += 1
-                except Exception as e:
-                    logger.error(f"Maintenance: failed to remove empty folder {folder}: {e}")
-                    errors += 1
-            
-            if errors > 0:
-                QMessageBox.warning(
-                    self, "Partial Success",
-                    f"Removed {removed} empty folder(s).\n{errors} folder(s) could not be removed."
-                )
-            else:
-                QMessageBox.information(
-                    self, "Success",
-                    f"Removed {removed} empty recording folder(s)."
-                )
+        if errors > 0:
+            ThemedMessageDialog.warning(
+                self, "Partial Success",
+                f"Removed {removed} empty folder(s). {errors} folder(s) could not be removed."
+            )
+        else:
+            ThemedMessageDialog.info(
+                self, "Success",
+                f"Removed {removed} empty recording folder(s)."
+            )
             
             logger.info(f"Maintenance: cleared {removed} empty recording folders ({errors} errors)")
             self.statusBar().showMessage(f"Cleared {removed} empty recording folders")
@@ -3506,9 +3484,9 @@ class TranscriptRecorderApp(QMainWindow):
         
         if GITHUB_OWNER == "YOUR_GITHUB_USERNAME":
             logger.warning("Update check: skipped (GITHUB_OWNER not configured)")
-            QMessageBox.information(
+            ThemedMessageDialog.info(
                 self, "Update Check",
-                "Update checking is not configured.\n\n"
+                "Update checking is not configured. "
                 "Please update GITHUB_OWNER and GITHUB_REPO in version.py "
                 "with your GitHub repository information."
             )
@@ -3555,35 +3533,31 @@ class TranscriptRecorderApp(QMainWindow):
                         download_asset = asset
                         break
                 
+                notes_preview = release_notes[:500] + ('...' if len(release_notes) > 500 else '')
                 msg = (
-                    f"A new version is available!\n\n"
-                    f"Current version: {APP_VERSION}\n"
-                    f"Latest version: {latest_version}\n\n"
-                    f"Release notes:\n{release_notes[:500]}{'...' if len(release_notes) > 500 else ''}"
+                    f"A new version is available! "
+                    f"Current version: {APP_VERSION}. "
+                    f"Latest version: {latest_version}. "
+                    f"Release notes: {notes_preview}"
                 )
                 
                 if download_asset:
                     logger.debug(f"Update check: downloadable asset found: {download_asset.get('name')}")
-                    reply = QMessageBox.question(
+                    if ThemedMessageDialog.question(
                         self, "Update Available",
-                        f"{msg}\n\nWould you like to download and install the update?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                    )
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
+                        f"{msg} Would you like to download and install the update?"
+                    ):
                         self._download_and_install_update(download_asset, latest_version)
                 else:
                     logger.debug("Update check: no downloadable asset (.dmg or .zip) found")
-                    reply = QMessageBox.question(
+                    if ThemedMessageDialog.question(
                         self, "Update Available",
-                        f"{msg}\n\nWould you like to open the release page in your browser?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                    )
-                    if reply == QMessageBox.StandardButton.Yes:
+                        f"{msg} Would you like to open the release page in your browser?"
+                    ):
                         subprocess.run(["open", release_url])
             else:
                 logger.info(f"Update check: already on latest version ({APP_VERSION})")
-                QMessageBox.information(
+                ThemedMessageDialog.info(
                     self, "No Updates",
                     f"You're running the latest version ({APP_VERSION})."
                 )
@@ -3593,31 +3567,31 @@ class TranscriptRecorderApp(QMainWindow):
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 logger.warning(f"Update check: no releases found (HTTP 404)")
-                QMessageBox.information(
+                ThemedMessageDialog.info(
                     self, "No Releases",
-                    f"No releases have been published yet.\n\n"
-                    f"You're running version {APP_VERSION}.\n\n"
+                    f"No releases have been published yet. "
+                    f"You're running version {APP_VERSION}. "
                     f"Checked: {url}"
                 )
             else:
                 logger.error(f"Update check: HTTP error {e.code} {e.reason} ({url})")
-                QMessageBox.warning(
+                ThemedMessageDialog.warning(
                     self, "Update Check Failed",
-                    f"HTTP Error {e.code}: {e.reason}\n\nURL: {url}"
+                    f"HTTP Error {e.code}: {e.reason}. URL: {url}"
                 )
             self.statusBar().showMessage("Ready")
         except urllib.error.URLError as e:
             logger.error(f"Update check: connection failed: {e} ({url})")
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Update Check Failed",
-                f"Could not connect to GitHub to check for updates.\n\nError: {e}\n\nURL: {url}"
+                f"Could not connect to GitHub to check for updates. Error: {e}. URL: {url}"
             )
             self.statusBar().showMessage("Update check failed")
         except Exception as e:
             logger.error(f"Update check: unexpected error: {e} ({url})", exc_info=True)
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Update Check Failed",
-                f"An error occurred while checking for updates.\n\nError: {e}\n\nURL: {url}"
+                f"An error occurred while checking for updates. Error: {e}. URL: {url}"
             )
             self.statusBar().showMessage("Update check failed")
     
@@ -3628,7 +3602,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         if not download_url or not filename:
             logger.error("Update download: missing download URL or filename")
-            QMessageBox.warning(self, "Download Failed", "Could not get download URL.")
+            ThemedMessageDialog.warning(self, "Download Failed", "Could not get download URL.")
             return
         
         try:
@@ -3653,11 +3627,11 @@ class TranscriptRecorderApp(QMainWindow):
                 self.statusBar().showMessage("Opening installer...")
                 subprocess.run(["open", str(download_path)])
                 
-                QMessageBox.information(
+                ThemedMessageDialog.info(
                     self, "Update Downloaded",
-                    f"The update has been downloaded and opened.\n\n"
-                    f"Please drag the new version to your Applications folder "
-                    f"to complete the update, then restart the application."
+                    "The update has been downloaded and opened. "
+                    "Please drag the new version to your Applications folder "
+                    "to complete the update, then restart the application."
                 )
             elif filename.endswith(".zip"):
                 self.statusBar().showMessage("Extracting update...")
@@ -3665,34 +3639,31 @@ class TranscriptRecorderApp(QMainWindow):
                 shutil.unpack_archive(str(download_path), str(extract_dir))
                 subprocess.run(["open", str(extract_dir)])
                 
-                QMessageBox.information(
+                ThemedMessageDialog.info(
                     self, "Update Downloaded",
-                    f"The update has been downloaded and extracted.\n\n"
-                    f"Please move the new application to your Applications folder "
-                    f"to complete the update, then restart the application."
+                    "The update has been downloaded and extracted. "
+                    "Please move the new application to your Applications folder "
+                    "to complete the update, then restart the application."
                 )
             
             self.statusBar().showMessage("Update ready to install")
             
         except Exception as e:
             logger.error(f"Update download: failed to download {filename}: {e}", exc_info=True)
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Download Failed",
-                f"Failed to download the update.\n\nError: {e}"
+                f"Failed to download the update. Error: {e}"
             )
             self.statusBar().showMessage("Update download failed")
         
     def closeEvent(self, event):
         """Handle window close."""
         if self.is_recording:
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self,
                 "Recording in Progress",
-                "Recording is still in progress. Stop and exit?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.No:
+                "Recording is still in progress. Stop and exit?"
+            ):
                 event.ignore()
                 return
             self._on_stop_recording()

@@ -57,6 +57,10 @@ _TINTS: dict[str, dict[bool, str]] = {
         True:  "#E57373",
         False: "#C62828",
     },
+    "warning": {
+        True:  "#D4B106",   # dark-mode  status_warn_text
+        False: "#856404",   # light-mode status_warn_text
+    },
 }
 
 
@@ -206,6 +210,37 @@ _SVG_SOURCES: dict[str, str] = {
         '<path d="m6 8 6 2 6-2"/>'
         '<path d="M12 10v4"/></svg>'
     ),
+    "circle_alert": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="10"/>'
+        '<line x1="12" x2="12" y1="8" y2="12"/>'
+        '<line x1="12" x2="12.01" y1="16" y2="16"/></svg>'
+    ),
+    "circle_x": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="10"/>'
+        '<path d="m15 9-6 6"/>'
+        '<path d="m9 9 6 6"/></svg>'
+    ),
+    "circle_check": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M21.801 10A10 10 0 1 1 17 3.335"/>'
+        '<path d="m9 11 3 3L22 4"/></svg>'
+    ),
+    "circle_help": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="10"/>'
+        '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
+        '<path d="M12 17h.01"/></svg>'
+    ),
 }
 
 
@@ -262,6 +297,40 @@ class IconManager:
         :meth:`get_icon` calls re-render with the correct tint.
         """
         cls._cache.clear()
+
+    @classmethod
+    def get_pixmap(
+        cls,
+        name: str,
+        *,
+        is_dark: bool = False,
+        tint: str = "default",
+        size: int = 24,
+    ) -> QPixmap:
+        """Return a high-DPI QPixmap for the named icon (no QIcon wrapper)."""
+        svg_str = cls._tinted_svg(name, is_dark, tint)
+
+        dpr = 1.0
+        app = QApplication.instance()
+        if app is not None:
+            screen = app.primaryScreen()
+            if screen is not None:
+                dpr = screen.devicePixelRatio()
+
+        physical = int(size * dpr)
+
+        renderer = QSvgRenderer(QByteArray(svg_str.encode("utf-8")))
+        renderer.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+
+        pixmap = QPixmap(physical, physical)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.setDevicePixelRatio(dpr)
+
+        target = QRectF(0, 0, size, size)
+        painter = QPainter(pixmap)
+        renderer.render(painter, target)
+        painter.end()
+        return pixmap
 
     @classmethod
     def available_icons(cls) -> list[str]:

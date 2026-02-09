@@ -11,12 +11,13 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QTextEdit, QMessageBox, QLineEdit,
+    QLabel, QPushButton, QTextEdit, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QCheckBox,
 )
 
 from gui.constants import APP_NAME, APP_VERSION, logger
+from gui.dialogs import ThemedMessageDialog
 from gui.versioning import read_stored_hash
 from gui.workers import ToolFetchWorker
 from version import GITHUB_OWNER, GITHUB_REPO
@@ -253,9 +254,9 @@ class ToolImportDialog(QMainWindow):
 
         if errors:
             error_text = "\n".join(errors)
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Import Errors",
-                f"Some tools failed to install:\n\n{error_text}"
+                f"Some tools failed to install: {error_text}"
             )
 
         if installed:
@@ -274,10 +275,10 @@ class ToolImportDialog(QMainWindow):
                     backup_files.append(f"  {n}/{backups[-1].name}")
 
             if backup_files:
-                backup_list = "\n".join(backup_files)
+                backup_list = ", ".join(backup_files)
                 backup_note = (
-                    f"\n\nYour previous tool.json file(s) have been backed up:\n"
-                    f"{backup_list}\n\n"
+                    f" Your previous tool.json file(s) have been backed up: "
+                    f"{backup_list}. "
                     f"You can compare the backup against the new tool.json to "
                     f"restore your custom settings. Use Tools > Edit Tool "
                     f"Configuration to edit tool.json, or Tools > Open Tools "
@@ -287,12 +288,12 @@ class ToolImportDialog(QMainWindow):
                 backup_note = ""
 
             msg = (
-                f"Successfully installed: {names}\n\n"
+                f"Successfully installed: {names}. "
                 f"Please review and configure the defaults in each tool's "
                 f"tool.json file before running.{backup_note}"
             )
 
-            QMessageBox.information(self, "Tools Installed", msg)
+            ThemedMessageDialog.info(self, "Tools Installed", msg)
             self.tools_imported.emit()
 
             self._set_status(f"Installed {len(installed)} tool(s)", "success")
@@ -428,9 +429,9 @@ class ToolJsonEditorDialog(QMainWindow):
 
     def _save(self):
         if not self._validate():
-            QMessageBox.warning(
+            ThemedMessageDialog.warning(
                 self, "Invalid JSON",
-                "The file contains invalid JSON and cannot be saved.\n\n"
+                "The file contains invalid JSON and cannot be saved. "
                 "Please fix the errors and try again."
             )
             return
@@ -448,18 +449,15 @@ class ToolJsonEditorDialog(QMainWindow):
             logger.info(f"Tool config editor: saved {self._tool_json_path}")
             self.config_saved.emit()
         except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
+            ThemedMessageDialog.critical(self, "Save Error", f"Failed to save: {e}")
 
     def closeEvent(self, event):
         if self._is_modified:
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self,
                 "Unsaved Changes",
-                "You have unsaved changes. Close without saving?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
+                "You have unsaved changes. Close without saving?"
+            ):
                 event.ignore()
                 return
         event.accept()

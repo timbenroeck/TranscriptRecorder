@@ -13,12 +13,13 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QLineEdit, QSpinBox, QComboBox, QCheckBox,
-    QTextEdit, QMessageBox, QTabWidget, QGroupBox, QScrollArea,
+    QTextEdit, QTabWidget, QGroupBox, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QSizePolicy, QFrame,
 )
 
 from gui.constants import logger
+from gui.dialogs import ThemedMessageDialog
 
 
 # Common AX roles offered in drop-downs for convenience
@@ -674,13 +675,10 @@ class RuleEditorDialog(QMainWindow):
 
     def _reload(self):
         if self._is_modified:
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self, "Unsaved Changes",
-                "You have unsaved changes. Reload and discard them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
+                "You have unsaved changes. Reload and discard them?"
+            ):
                 return
         self._load()
         self._set_status("Reloaded from disk.", "info")
@@ -692,7 +690,7 @@ class RuleEditorDialog(QMainWindow):
         # General
         data["display_name"] = self.display_name_edit.text().strip()
         if not data["display_name"]:
-            QMessageBox.warning(self, "Validation Error", "Display Name is required.")
+            ThemedMessageDialog.warning(self, "Validation Error", "Display Name is required.")
             return
 
         data["command_paths"] = self.command_paths_editor.get_paths()
@@ -726,7 +724,7 @@ class RuleEditorDialog(QMainWindow):
             self.rule_saved.emit()
 
         except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save rule:\n{e}")
+            ThemedMessageDialog.critical(self, "Save Error", f"Failed to save rule: {e}")
 
     # -- Path management --
     def _add_path(self):
@@ -748,13 +746,10 @@ class RuleEditorDialog(QMainWindow):
 
     def closeEvent(self, event):
         if self._is_modified:
-            reply = QMessageBox.question(
+            if not ThemedMessageDialog.question(
                 self, "Unsaved Changes",
-                "You have unsaved changes. Close without saving?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
+                "You have unsaved changes. Close without saving?"
+            ):
                 event.ignore()
                 return
         event.accept()
