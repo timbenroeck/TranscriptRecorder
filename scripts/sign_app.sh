@@ -1,0 +1,103 @@
+#!/bin/bash
+# Code-signs a built .app bundle for Transcript Recorder
+#
+# Usage:
+#   scripts/sign_app.sh                                          # defaults to SourceBuild app
+#   scripts/sign_app.sh "dist/Transcript Recorder.app"           # specify a different app
+#   scripts/sign_app.sh "dist/Transcript Recorder.app" "Developer ID Application: ..."
+#
+# Prerequisites:
+#   - Developer ID Application certificate installed in Keychain
+#   - entitlements.plist in the project root
+
+set -e
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+APP_PATH="${1:-dist/Transcript Recorder SourceBuild.app}"
+IDENTITY="${2:-Developer ID Application: Tim Benroeck (Q6YV5V6UR9)}"
+ENTITLEMENTS="$PROJECT_ROOT/entitlements.plist"
+
+# --- Validation ---
+if [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: App bundle not found at: $APP_PATH"
+    echo "Usage: $0 [path-to-app] [signing-identity]"
+    exit 1
+fi
+
+if [ ! -f "$ENTITLEMENTS" ]; then
+    echo "ERROR: Entitlements file not found at: $ENTITLEMENTS"
+    exit 1
+fi
+
+echo "=== Code Signing ==="
+echo "App:          $APP_PATH"
+echo "Identity:     $IDENTITY"
+echo "Entitlements: $ENTITLEMENTS"
+echo ""
+
+# --- Step 1: Sign all .so files (Python extensions) ---
+echo "Signing .so files..."
+SO_COUNT=$(find "$APP_PATH" -name "*.so" | wc -l | tr -d ' ')
+find "$APP_PATH" -name "*.so" -exec \
+    codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$IDENTITY" {} \;
+echo "  Signed $SO_COUNT .so files"
+
+# --- Step 2: Sign all .dylib files ---
+echo "Signing .dylib files..."
+DYLIB_COUNT=$(find "$APP_PATH" -name "*.dylib" | wc -l | tr -d ' ')
+find "$APP_PATH" -name "*.dylib" -exec \
+    codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$IDENTITY" {} \;
+echo "  Signed $DYLIB_COUNT .dylib files"
+
+# --- Step 3: Sign all embedded frameworks ---
+echo "Signing embedded frameworks..."
+if [ -d "$APP_PATH/Contents/Frameworks" ]; then
+    for framework in "$APP_PATH"/Contents/Frameworks/*.framework; do
+        if [ -d "$framework" ]; then
+            echo "  Signing $(basename "$framework")..."
+            codesign --force --options runtime --timestamp \
+                --entitlements "$ENTITLEMENTS" \
+                --sign "$IDENTITY" "$framework"
+        fi
+    done
+else
+    echo "  No Frameworks directory found (OK for some builds)"
+fi
+
+# --- Step 4: Sign all executables in MacOS/ ---
+echo "Signing executables in Contents/MacOS/..."
+for exec_file in "$APP_PATH"/Contents/MacOS/*; do
+    if [ -f "$exec_file" ]; then
+        echo "  Signing $(basename "$exec_file")..."
+        codesign --force --options runtime --timestamp \
+            --entitlements "$ENTITLEMENTS" \
+            --sign "$IDENTITY" "$exec_file"
+    fi
+done
+
+# --- Step 5: Sign the entire .app bundle ---
+echo "Signing .app bundle..."
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$IDENTITY" "$APP_PATH"
+
+echo ""
+echo "=== Signing Complete ==="
+
+# --- Verify ---
+echo ""
+echo "=== Verifying Signature ==="
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+echo ""
+echo "Signature details:"
+codesign -dv "$APP_PATH" 2>&1
+echo ""
+echo "=== Gatekeeper Assessment ==="
+spctl --assess --type execute --verbose=2 "$APP_PATH" 2>&1 || echo "(Will pass after notarization)"
+echo ""

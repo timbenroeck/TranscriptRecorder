@@ -202,6 +202,11 @@ def get_application_stylesheet(is_dark: bool, combo_arrow_path: str = "") -> str
             height: 12px;
             margin-right: 6px;
         }}
+        QComboBox:disabled {{
+            background-color: {disabled_bg};
+            color: {disabled_text};
+            border: 1px solid {border};
+        }}
         QComboBox QAbstractItemView {{
             background-color: {bg_widget};
             color: {text_main};

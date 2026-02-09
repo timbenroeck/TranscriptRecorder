@@ -1,0 +1,9 @@
+{
+  "rules": [
+    "zoom",
+    "msteams"
+  ],
+  "tools": [
+    "clean_transcript"
+  ]
+}

@@ -91,7 +91,17 @@ else
     exit 1
 fi
 
-# --- Step 6: Launch prompt ---
+# --- Step 6: Code Sign ---
+echo ""
+echo "=== Step 6: Code Signing ==="
+read -p "Would you like to code sign the app? (y/n): " SIGN_CHOICE
+if [[ "$SIGN_CHOICE" =~ ^[Yy]$ ]]; then
+    "$SCRIPT_DIR/sign_app.sh" "dist/$APP_NAME.app"
+else
+    echo "Skipping code signing."
+fi
+
+# --- Step 7: Launch prompt ---
 echo ""
 echo "=== Build Complete ==="
 echo ""

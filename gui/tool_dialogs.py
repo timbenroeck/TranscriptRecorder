@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui.constants import APP_NAME, APP_VERSION, logger
+from gui.versioning import read_stored_hash
 from gui.workers import ToolFetchWorker
 from version import GITHUB_OWNER, GITHUB_REPO
 
@@ -155,12 +156,6 @@ class ToolImportDialog(QMainWindow):
         self._fetched_tools = tools
         self.tool_table.setRowCount(0)
 
-        installed_tools = set()
-        if self._local_tools_dir.exists():
-            installed_tools = {
-                p.name for p in self._local_tools_dir.iterdir() if p.is_dir()
-            }
-
         for row_idx, tool in enumerate(tools):
             self.tool_table.insertRow(row_idx)
 
@@ -178,8 +173,8 @@ class ToolImportDialog(QMainWindow):
             name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.tool_table.setItem(row_idx, 1, name_item)
 
-            # Status
-            status = "Installed" if tool["name"] in installed_tools else "Not installed"
+            # Status — hash-aware
+            status = self._compute_tool_status(tool["name"])
             status_item = QTableWidgetItem(status)
             status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.tool_table.setItem(row_idx, 2, status_item)
@@ -302,17 +297,24 @@ class ToolImportDialog(QMainWindow):
             self.status_label.setText("No tools were installed.")
             self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
 
+    def _compute_tool_status(self, tool_name: str) -> str:
+        """Compute install status for a tool using .sha256 hash files."""
+        local_tool_json = self._local_tools_dir / tool_name / "tool.json"
+        if not local_tool_json.exists():
+            return "Not installed"
+
+        local_hash = read_stored_hash(local_tool_json)
+        if local_hash is None:
+            return "Installed (modified)"
+
+        return "Installed"
+
     def _refresh_status_column(self):
         """Update the Status column after an install."""
-        installed_tools = set()
-        if self._local_tools_dir.exists():
-            installed_tools = {
-                p.name for p in self._local_tools_dir.iterdir() if p.is_dir()
-            }
         for row in range(self.tool_table.rowCount()):
             name_item = self.tool_table.item(row, 1)
             if name_item:
-                status = "Installed" if name_item.text() in installed_tools else "Not installed"
+                status = self._compute_tool_status(name_item.text())
                 status_item = self.tool_table.item(row, 2)
                 if status_item:
                     status_item.setText(status)
@@ -321,7 +323,7 @@ class ToolImportDialog(QMainWindow):
 class ToolJsonEditorDialog(QMainWindow):
     """A window for viewing and editing a tool's tool.json file.
 
-    Modelled after ``ConfigEditorDialog`` — provides a raw JSON text editor
+    Provides a raw JSON text editor for a tool's tool.json file
     with Reload / Save / Validate controls.
     """
 

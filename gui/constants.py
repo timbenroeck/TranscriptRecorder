@@ -22,8 +22,17 @@ APP_VERSION = __version__
 APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "TranscriptRecorder"
 CONFIG_PATH = APP_SUPPORT_DIR / "config.json"
 LOG_DIR = APP_SUPPORT_DIR / ".logs"
-DEFAULT_EXPORT_DIR = Path.home() / "Documents" / "TranscriptRecorder"
-OLD_CONFIG_DIR = Path.home() / "Documents" / "transcriptrecorder"  # migration detection
+DEFAULT_EXPORT_DIR = Path.home() / "Documents" / "TranscriptRecordings"  # suggestion only (shown in file dialogs)
+
+# --- Built-in Manual Recording Rule ---
+# This is a virtual rule that does not live on disk.  It allows the user to
+# paste a transcript manually without needing any capture rules or accessibility
+# permissions.  The key is never written to the rules directory.
+MANUAL_RECORDING_KEY = "__manual__"
+MANUAL_RECORDING_RULE = {
+    "display_name": "Manual Recording",
+    "description": "Paste or type a transcript manually — no live capture needed.",
+}
 
 # --- Logging Setup ---
 LOG_LEVELS = {
@@ -32,6 +41,7 @@ LOG_LEVELS = {
     "WARNING": logging.WARNING,
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL,
+    "NONE": None,  # Disables logging entirely
 }
 
 # Create logger
@@ -54,6 +64,13 @@ def setup_logging(config: Optional[Dict] = None):
     # Clear existing handlers
     logger.handlers.clear()
     tr_lib_logger.handlers.clear()
+    
+    # If logging is disabled (NONE), set to highest level and skip handlers
+    if log_level is None:
+        logger.setLevel(logging.CRITICAL + 10)
+        tr_lib_logger.setLevel(logging.CRITICAL + 10)
+        current_log_file_path = None
+        return
     
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
     

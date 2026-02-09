@@ -54,21 +54,73 @@ IS_SOURCE_BUILD = os.environ.get('SOURCE_BUILD', '0') == '1'
 # App information
 if IS_SOURCE_BUILD:
     APP_NAME = 'Transcript Recorder SourceBuild'
-    APP_BUNDLE_ID = 'com.transcriptrecorder.sourcebuild'
+    APP_BUNDLE_ID = 'com.benroeck.transcriptrecorder.sourcebuild'
 else:
     APP_NAME = 'Transcript Recorder'
-    APP_BUNDLE_ID = 'com.transcriptrecorder.app'
+    APP_BUNDLE_ID = 'com.benroeck.transcriptrecorder.app'
 
 APP_VERSION = __version__
 
 # Main script
 APP_SCRIPT = 'gui_app.py'
 
-# Additional files to include
+# Additional files to include (flat files go into Resources/)
 DATA_FILES = [
     'config.json',
-    'transcriber.icns',
+    'appicon.icns',
 ]
+
+# --- Bundle manifest ---
+# bundle.json at the repo root controls which rules and tools are shipped
+# inside the .app.  Only explicitly listed items are included.
+import json as _json
+
+_bundle_manifest_path = Path(__file__).parent / 'bundle.json'
+_bundle_rules: list = []
+_bundle_tools: list = []
+
+if _bundle_manifest_path.exists():
+    with open(_bundle_manifest_path, 'r', encoding='utf-8') as _bf:
+        _manifest = _json.load(_bf)
+    _bundle_rules = _manifest.get('rules', [])
+    _bundle_tools = _manifest.get('tools', [])
+    print(f"Bundle manifest: {len(_bundle_rules)} rules, {len(_bundle_tools)} tools")
+else:
+    print("WARNING: bundle.json not found — no rules or tools will be bundled")
+
+# Collect bundled rules — only those listed in the manifest
+_rules_base = Path(__file__).parent / 'rules'
+for _rule_name in _bundle_rules:
+    _rule_dir = _rules_base / _rule_name
+    if not _rule_dir.is_dir():
+        print(f"WARNING: bundled rule '{_rule_name}' not found at {_rule_dir}")
+        continue
+    rule_files = [str(_f) for _f in sorted(_rule_dir.iterdir()) if _f.is_file()]
+    if rule_files:
+        DATA_FILES.append((f'rules/{_rule_name}', rule_files))
+        print(f"  bundle rule: {_rule_name} ({len(rule_files)} files)")
+
+# Collect bundled tools — only those listed in the manifest
+# Walks recursively to capture subdirectories (e.g. data/corrections.json)
+_tools_base = Path(__file__).parent / 'tools'
+for _tool_name in _bundle_tools:
+    _tool_dir = _tools_base / _tool_name
+    if not _tool_dir.is_dir():
+        print(f"WARNING: bundled tool '{_tool_name}' not found at {_tool_dir}")
+        continue
+    # Files directly in the tool root
+    root_files = [str(_f) for _f in sorted(_tool_dir.iterdir()) if _f.is_file()]
+    if root_files:
+        DATA_FILES.append((f'tools/{_tool_name}', root_files))
+    # Walk subdirectories (e.g. data/)
+    for _dirpath in sorted(_tool_dir.rglob('*')):
+        if _dirpath.is_dir():
+            sub_files = [str(_f) for _f in sorted(_dirpath.iterdir()) if _f.is_file()]
+            if sub_files:
+                rel = _dirpath.relative_to(_tools_base.parent)
+                DATA_FILES.append((str(rel), sub_files))
+    file_count = sum(1 for _ in _tool_dir.rglob('*') if _.is_file())
+    print(f"  bundle tool: {_tool_name} ({file_count} files)")
 
 # py2app options
 OPTIONS = {
@@ -85,6 +137,9 @@ OPTIONS = {
             'gui.dialogs',
             'gui.tool_dialogs',
             'gui.data_editors',
+            'gui.rule_dialogs',
+            'gui.rule_editor',
+            'gui.versioning',
             'gui.main_window',
             'asyncio',
             'json',
@@ -118,7 +173,7 @@ OPTIONS = {
             '_distutils_hack',
         ],
         'resources': DATA_FILES,
-        'iconfile': 'transcriber.icns',
+        'iconfile': 'appicon.icns',
         'plist': {
             'CFBundleName': APP_NAME,
             'CFBundleDisplayName': APP_NAME,
@@ -151,5 +206,4 @@ setup(
     app=[APP_SCRIPT],
     data_files=DATA_FILES,
     options=OPTIONS,
-    setup_requires=['py2app'],
 )

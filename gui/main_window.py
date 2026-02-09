@@ -33,8 +33,8 @@ from version import __version__, GITHUB_OWNER, GITHUB_REPO
 import gui.constants as _constants
 from gui.constants import (
     APP_NAME, APP_VERSION, APP_SUPPORT_DIR, CONFIG_PATH, LOG_DIR,
-    DEFAULT_EXPORT_DIR, OLD_CONFIG_DIR, logger,
-    setup_logging, resource_path, _HAS_APPKIT,
+    DEFAULT_EXPORT_DIR, MANUAL_RECORDING_KEY, MANUAL_RECORDING_RULE,
+    logger, setup_logging, resource_path, _HAS_APPKIT,
 )
 from gui.styles import get_application_stylesheet
 from gui.icons import IconManager
@@ -43,7 +43,7 @@ from gui.workers import (
     UpdateCheckWorker, ToolFetchWorker,
     STREAM_PARSERS, _stream_parser_raw,
 )
-from gui.dialogs import LogViewerDialog, SetupDialog, ConfigEditorDialog
+from gui.dialogs import LogViewerDialog
 from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
 from gui.data_editors import DataFileEditorDialog
 
@@ -70,6 +70,8 @@ class TranscriptRecorderApp(QMainWindow):
         self.capture_interval = 30  # Default capture interval in seconds
         self.theme_mode = "system"  # "light", "dark", or "system"
         self.meeting_details_dirty = False  # Track if meeting details need saving
+        self._discovered_rules: Dict[str, dict] = {}  # rule_key -> parsed rule.json
+        self._rules_dir: Optional[Path] = None
         self._discovered_tools: Dict[str, dict] = {}  # tool_key -> parsed JSON definition
         self._tool_scripts_dir: Optional[Path] = None
         self._tool_runner: Optional[ToolRunnerWorker] = None
@@ -84,6 +86,8 @@ class TranscriptRecorderApp(QMainWindow):
         self._default_size = QSize(600, 450)
         self._maximized_size = QSize(960, 720)
         self._has_accessibility = True  # Assume granted; _check_permissions will update
+        self._is_manual_mode = False  # True when the built-in Manual Recording rule is active
+        self._manual_save_timer: Optional[QTimer] = None  # Debounce timer for manual transcript saves
         
         # Setup UI
         self._setup_window()
@@ -102,10 +106,14 @@ class TranscriptRecorderApp(QMainWindow):
         self._startup_update_worker.update_available.connect(self._on_startup_update_available)
         self._startup_update_worker.start()
         
-        # Default to "hidden from screen sharing" -- deferred because the
-        # native NSWindow doesn't exist until after show() is called.
+        # Apply screen sharing privacy default from config (defaults to hidden)
         if _HAS_APPKIT:
-            QTimer.singleShot(100, lambda: self._toggle_privacy_mode(True))
+            privacy_default = True  # hidden by default
+            if self.config:
+                privacy_default = self.config.get("client_settings", {}).get(
+                    "screen_sharing_hidden", True
+                )
+            QTimer.singleShot(100, lambda: self._set_privacy_mode(privacy_default))
         
     def _setup_window(self):
         """Configure main window properties."""
@@ -114,7 +122,7 @@ class TranscriptRecorderApp(QMainWindow):
         # Will be adjusted to fit content after UI is built
         
         # Try to load app icon
-        icon_path = resource_path("transcriber.icns")
+        icon_path = resource_path("appicon.icns")
         if icon_path.exists():
             # On macOS, the app bundle's CFBundleIconFile provides the Dock
             # icon natively.  Calling setWindowIcon() overrides the native
@@ -748,26 +756,43 @@ class TranscriptRecorderApp(QMainWindow):
         
         view_menu.addSeparator()
         
-        self.privacy_action = QAction("Hide from Screen Sharing", self)
-        self.privacy_action.setCheckable(True)
-        self.privacy_action.setChecked(True)  # Private by default
-        self.privacy_action.setEnabled(_HAS_APPKIT)
-        self.privacy_action.triggered.connect(self._toggle_privacy_mode)
-        view_menu.addAction(self.privacy_action)
+        # Screen Sharing Privacy submenu
+        privacy_menu = view_menu.addMenu("Screen Sharing Privacy")
+        privacy_menu.setEnabled(_HAS_APPKIT)
+        
+        privacy_group = QActionGroup(self)
+        privacy_group.setExclusive(True)
+        
+        self.privacy_show_action = QAction("Show", self)
+        self.privacy_show_action.setCheckable(True)
+        self.privacy_show_action.triggered.connect(lambda: self._set_privacy_mode(False))
+        privacy_group.addAction(self.privacy_show_action)
+        privacy_menu.addAction(self.privacy_show_action)
+        
+        self.privacy_hide_action = QAction("Hide", self)
+        self.privacy_hide_action.setCheckable(True)
+        self.privacy_hide_action.triggered.connect(lambda: self._set_privacy_mode(True))
+        privacy_group.addAction(self.privacy_hide_action)
+        privacy_menu.addAction(self.privacy_hide_action)
+        
+        # Default is hidden; will be updated after config is loaded
+        self.privacy_hide_action.setChecked(True)
+        
+        privacy_menu.addSeparator()
+        
+        privacy_default_action = QAction("Change Default…", self)
+        privacy_default_action.triggered.connect(self._change_privacy_default)
+        privacy_menu.addAction(privacy_default_action)
         
         view_menu.addSeparator()
         
-        log_action = QAction("Log File...", self)
+        log_action = QAction("Log File…", self)
         log_action.setShortcut("Cmd+L")
         log_action.triggered.connect(self._show_log_viewer)
         view_menu.addAction(log_action)
         
-        # Also add to macOS app menu as Preferences (standard location for Cmd+,)
-        self.prefs_action = QAction("Preferences...", self)
-        self.prefs_action.setShortcut("Cmd+,")
-        self.prefs_action.setMenuRole(QAction.MenuRole.PreferencesRole)
-        self.prefs_action.triggered.connect(self._show_config_editor)
-        view_menu.addAction(self.prefs_action)  # Qt will move this to app menu on macOS
+        # Preferences placeholder — macOS places this in the app menu automatically
+        # (No longer needed since the config editor was removed)
         
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
@@ -794,21 +819,66 @@ class TranscriptRecorderApp(QMainWindow):
         refresh_tools_action.triggered.connect(self._scan_tools)
         tools_menu.addAction(refresh_tools_action)
         
+        # Rules menu
+        rules_menu = menubar.addMenu("Rules")
+        
+        import_rules_action = QAction("Import Rules...", self)
+        import_rules_action.triggered.connect(self._show_rule_import)
+        rules_menu.addAction(import_rules_action)
+        
+        edit_rule_action = QAction("Edit Rule...", self)
+        edit_rule_action.triggered.connect(self._show_rule_editor)
+        rules_menu.addAction(edit_rule_action)
+        
+        rules_menu.addSeparator()
+        
+        set_default_rule_action = QAction("Set Current as Default", self)
+        set_default_rule_action.triggered.connect(self._on_set_default_rule)
+        rules_menu.addAction(set_default_rule_action)
+        
+        clear_default_rule_action = QAction("Clear Default", self)
+        clear_default_rule_action.triggered.connect(self._on_clear_default_rule)
+        rules_menu.addAction(clear_default_rule_action)
+        
+        rules_menu.addSeparator()
+        
+        open_rules_folder_action = QAction("Open Rules Folder", self)
+        open_rules_folder_action.triggered.connect(self._open_rules_folder)
+        rules_menu.addAction(open_rules_folder_action)
+        
+        refresh_rules_action = QAction("Refresh Rules", self)
+        refresh_rules_action.triggered.connect(self._scan_rules)
+        rules_menu.addAction(refresh_rules_action)
+        
         # Maintenance menu
         maint_menu = menubar.addMenu("Maintenance")
-        
-        self.config_action = QAction("Edit Configuration...", self)
-        self.config_action.setMenuRole(QAction.MenuRole.NoRole)  # Prevent macOS from moving it
-        self.config_action.triggered.connect(self._show_config_editor)
-        maint_menu.addAction(self.config_action)
-        
-        reload_config_action = QAction("Reload Configuration", self)
-        reload_config_action.triggered.connect(self._reload_configuration)
-        maint_menu.addAction(reload_config_action)
         
         change_export_action = QAction("Change Export Directory…", self)
         change_export_action.triggered.connect(self._change_export_directory)
         maint_menu.addAction(change_export_action)
+        
+        # Log Level submenu
+        log_level_menu = maint_menu.addMenu("Log Level")
+        self._log_level_group = QActionGroup(self)
+        self._log_level_group.setExclusive(True)
+        
+        current_level = "INFO"
+        if self.config:
+            current_level = self.config.get("logging", {}).get("level", "INFO").upper()
+        
+        for level_name in ("DEBUG", "INFO", "WARNING", "ERROR", "NONE"):
+            action = QAction(level_name, self)
+            action.setCheckable(True)
+            action.setChecked(level_name == current_level)
+            action.triggered.connect(lambda checked, lvl=level_name: self._set_log_level(lvl))
+            self._log_level_group.addAction(action)
+            log_level_menu.addAction(action)
+        
+        log_level_menu.addSeparator()
+        
+        change_default_log_action = QAction("Change Default…", self)
+        change_default_log_action.triggered.connect(self._change_log_level_default)
+        log_level_menu.addAction(change_default_log_action)
         
         maint_menu.addSeparator()
         
@@ -847,7 +917,7 @@ class TranscriptRecorderApp(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
             
-        icon_path = resource_path("transcriber.icns")
+        icon_path = resource_path("appicon.icns")
         if not icon_path.exists():
             return
             
@@ -868,77 +938,72 @@ class TranscriptRecorderApp(QMainWindow):
     def _load_config(self):
         """Load application configuration.
         
-        Resolution order:
-        1. CONFIG_PATH in ~/Library/Application Support/TranscriptRecorder/
-        2. Migrate from OLD_CONFIG_DIR (~/Documents/transcriptrecorder/)
-        3. Show first-run SetupDialog
+        On first launch the bundled config.json is copied to App Support.
+        The bundled config has a blank export_directory, so the user will
+        be prompted to pick one before the app can proceed.
         """
         try:
             APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
             
             if not CONFIG_PATH.exists():
-                # Check for legacy config to migrate
-                old_config = OLD_CONFIG_DIR / "config.json"
-                if old_config.exists():
-                    # Load, fix legacy structure, and write to new location
-                    with open(old_config, 'r', encoding='utf-8') as f:
-                        migrated_data = json.load(f)
-                    
-                    # Flatten legacy client_settings.tui nesting
-                    cs = migrated_data.get("client_settings", {})
-                    if "tui" in cs and isinstance(cs["tui"], dict):
-                        tui = cs.pop("tui")
-                        for key, val in tui.items():
-                            if key not in cs:  # don't overwrite direct keys
-                                cs[key] = val
-                        migrated_data["client_settings"] = cs
-                        logger.info("Config migration: flattened client_settings.tui")
-                    
-                    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                        json.dump(migrated_data, f, indent=2)
-                    
-                    # Rename the old file so it's clearly no longer active
-                    deprecated_path = OLD_CONFIG_DIR / "config.json.deprecated"
-                    old_config.rename(deprecated_path)
-                    logger.info(f"Config: migrated from {old_config} to {CONFIG_PATH}, old file renamed to {deprecated_path}")
-                    self.statusBar().showMessage(
-                        "Configuration migrated to Application Support"
+                # First-run: copy the bundled default config to App Support
+                bundled_config = resource_path("config.json")
+                if not bundled_config.exists():
+                    QMessageBox.critical(
+                        self, "Missing Configuration",
+                        "Could not find the bundled configuration file.\n"
+                        "Please reinstall the application."
                     )
-                else:
-                    # First-run: show setup dialog
-                    dialog = SetupDialog(self)
-                    if dialog.exec() != QDialog.DialogCode.Accepted:
-                        logger.warning("Config: user cancelled first-run setup")
-                        QMessageBox.critical(
-                            self, "Configuration Required",
-                            "A configuration is required to run the application.\n\n"
-                            "The application will now close."
-                        )
-                        QTimer.singleShot(0, self.close)
-                        return
+                    QTimer.singleShot(0, self.close)
+                    return
+                
+                shutil.copy2(str(bundled_config), str(CONFIG_PATH))
+                logger.info(f"Config: first run — copied bundled config to {CONFIG_PATH}")
             
             with open(CONFIG_PATH, 'r') as f:
                 self.config = json.load(f)
                 
-            # Set export directory
+            # Set export directory (blank means user must pick one)
             client_settings = self.config.get("client_settings", {})
-            export_dir = client_settings.get("export_directory", str(DEFAULT_EXPORT_DIR))
+            export_dir = client_settings.get("export_directory", "").strip()
+
+            if not export_dir:
+                export_dir = self._prompt_for_export_directory()
+                if not export_dir:
+                    QMessageBox.critical(
+                        self, "Export Directory Required",
+                        "An export directory is required to run the application.\n\n"
+                        "The application will now close."
+                    )
+                    QTimer.singleShot(0, self.close)
+                    return
+
             self.export_base_dir = Path(export_dir).expanduser().resolve()
             self.export_base_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Ensure tools directory exists alongside recordings
+
+            # Ensure tools and rules directories exist
             (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
+            (self.export_base_dir / "rules").mkdir(parents=True, exist_ok=True)
+            
+            # Copy bundled rules and tools if not already present (first run)
+            self._install_bundled_rules()
+            self._install_bundled_tools()
             
             # Configure logging from config
             setup_logging(self.config)
             
-            # Populate app selection and discover tools
-            self._populate_app_combo()
+            # Sync Log Level menu radio buttons with the loaded config
+            saved_level = self.config.get("logging", {}).get("level", "INFO").upper()
+            for action in self._log_level_group.actions():
+                action.setChecked(action.text() == saved_level)
+            
+            # Scan for rules and tools
+            self._scan_rules()
             self._scan_tools()
             
-            app_count = self.config.get("application_settings", {})
             log_level = self.config.get("logging", {}).get("level", "INFO")
-            logger.info(f"Config: loaded from {CONFIG_PATH} ({len(app_count)} apps, log_level={log_level})")
+            file_rules = len(self._discovered_rules) - 1  # subtract built-in Manual Recording
+            logger.info(f"Config: loaded from {CONFIG_PATH} ({file_rules} rules + Manual Recording, log_level={log_level})")
             self.statusBar().showMessage("Configuration loaded")
             
         except json.JSONDecodeError as e:
@@ -953,20 +1018,212 @@ class TranscriptRecorderApp(QMainWindow):
             )
             logger.error(f"Config load error: {e}", exc_info=True)
     
-    def _populate_app_combo(self):
-        """Fill the application dropdown from config."""
-        if not self.config:
+    def _install_bundled_rules(self):
+        """Copy bundled rule files from the app bundle into the export dir.
+
+        Only copies rules that do not already exist locally, so user
+        customisations are never overwritten.
+        """
+        rules_dir = self.export_base_dir / "rules"
+        bundled_rules_dir = resource_path("rules")
+
+        if not bundled_rules_dir.exists() or not bundled_rules_dir.is_dir():
+            logger.debug("Bundled rules directory not found — skipping install")
             return
-            
+
+        for bundled_rule_dir in sorted(bundled_rules_dir.iterdir()):
+            if not bundled_rule_dir.is_dir():
+                continue
+            src_rule = bundled_rule_dir / "rule.json"
+            if not src_rule.exists():
+                continue
+
+            dest_dir = rules_dir / bundled_rule_dir.name
+            dest_rule = dest_dir / "rule.json"
+            if dest_rule.exists():
+                continue  # Don't overwrite existing user rules
+
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_rule), str(dest_rule))
+            # Also copy the .sha256 if present
+            src_hash = bundled_rule_dir / "rule.json.sha256"
+            if src_hash.exists():
+                shutil.copy2(str(src_hash), str(dest_dir / "rule.json.sha256"))
+            logger.info(f"Bundled rules: installed {bundled_rule_dir.name}")
+
+    def _install_bundled_tools(self):
+        """Copy bundled tool directories from the app bundle into the export dir.
+
+        Only copies tools that do not already exist locally, so user
+        customisations are never overwritten.  Sub-directories (e.g. ``data/``)
+        are recreated as well.
+        """
+        tools_dir = self.export_base_dir / "tools"
+        bundled_tools_dir = resource_path("tools")
+
+        if not bundled_tools_dir.exists() or not bundled_tools_dir.is_dir():
+            logger.debug("Bundled tools directory not found — skipping install")
+            return
+
+        for bundled_tool_dir in sorted(bundled_tools_dir.iterdir()):
+            if not bundled_tool_dir.is_dir():
+                continue
+            src_tool_json = bundled_tool_dir / "tool.json"
+            if not src_tool_json.exists():
+                continue
+
+            dest_dir = tools_dir / bundled_tool_dir.name
+            dest_tool_json = dest_dir / "tool.json"
+            if dest_tool_json.exists():
+                continue  # Don't overwrite existing user tools
+
+            # Recursively copy the entire tool directory
+            shutil.copytree(str(bundled_tool_dir), str(dest_dir))
+
+            # Ensure scripts are executable
+            for script in dest_dir.glob("*.sh"):
+                script.chmod(script.stat().st_mode | 0o111)
+            for script in dest_dir.glob("*.py"):
+                script.chmod(script.stat().st_mode | 0o111)
+
+            logger.info(f"Bundled tools: installed {bundled_tool_dir.name}")
+
+    def _scan_rules(self):
+        """Scan ``<export_dir>/rules/`` for rule definitions and populate the app combo.
+
+        The built-in Manual Recording entry is always inserted first so the
+        app is functional on first launch even without downloaded rules.
+        """
+        self._discovered_rules = {}
         self.app_combo.clear()
-        app_settings = self.config.get("application_settings", {})
-        
-        for app_key, app_data in app_settings.items():
-            display_name = app_data.get("display_name", app_key)
-            self.app_combo.addItem(display_name, app_key)
-            
+
+        # Always add the built-in Manual Recording entry first
+        self._discovered_rules[MANUAL_RECORDING_KEY] = MANUAL_RECORDING_RULE
+        self.app_combo.addItem(
+            MANUAL_RECORDING_RULE["display_name"], MANUAL_RECORDING_KEY
+        )
+
+        if not self.export_base_dir:
+            return
+
+        self._rules_dir = self.export_base_dir / "rules"
+
+        try:
+            self._rules_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Rules: failed to create rules directory: {e}")
+            return
+
+        try:
+            subdirs = sorted(
+                p for p in self._rules_dir.iterdir() if p.is_dir()
+            )
+        except OSError as e:
+            logger.error(f"Rules: could not list rules directory: {e}")
+            return
+
+        for rule_dir in subdirs:
+            json_path = rule_dir / "rule.json"
+            if not json_path.exists():
+                logger.debug(f"Rules: no rule.json in {rule_dir.name}/ — skipped")
+                continue
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    rule_def = json.load(f)
+
+                if not rule_def.get("display_name"):
+                    logger.warning(f"Rules: {rule_dir.name}/rule.json missing 'display_name'")
+                    continue
+
+                rule_def["_rule_dir"] = str(rule_dir)
+                rule_def["_json_path"] = str(json_path)
+
+                rule_key = rule_dir.name
+                self._discovered_rules[rule_key] = rule_def
+                self.app_combo.addItem(rule_def["display_name"], rule_key)
+
+                logger.debug(f"Rules: discovered '{rule_def['display_name']}' in {rule_dir.name}/")
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"Rules: invalid JSON in {rule_dir.name}/rule.json: {e}")
+            except Exception as e:
+                logger.error(f"Rules: error loading {rule_dir.name}/rule.json: {e}")
+
+        # Count excludes the built-in Manual Recording entry
+        file_rule_count = len(self._discovered_rules) - 1  # subtract built-in
+        if file_rule_count > 0:
+            logger.info(f"Rules: discovered {file_rule_count} rule(s) in {self._rules_dir}")
+        else:
+            logger.debug(f"Rules: no rules found in {self._rules_dir}")
+
         if self.app_combo.count() > 0:
-            self._on_app_changed(0)
+            self._apply_default_rule()
+    
+    def _apply_default_rule(self):
+        """Select the default rule in the app combo, or fall back to index 0."""
+        default_key = ""
+        if self.config:
+            default_key = self.config.get("client_settings", {}).get("default_rule", "")
+        
+        if default_key:
+            for i in range(self.app_combo.count()):
+                if self.app_combo.itemData(i) == default_key:
+                    self.app_combo.setCurrentIndex(i)
+                    self._on_app_changed(i)
+                    logger.debug(f"Rules: selected default rule '{default_key}'")
+                    return
+            # Default rule not found among discovered rules
+            logger.warning(f"Rules: configured default_rule '{default_key}' not found, using first rule")
+        
+        self.app_combo.setCurrentIndex(0)
+        self._on_app_changed(0)
+    
+    def _on_set_default_rule(self):
+        """Save the currently selected rule as the default in config."""
+        current_key = self.app_combo.currentData()
+        if not current_key:
+            QMessageBox.information(self, "No Rule Selected", "Please select a rule first.")
+            return
+        
+        display_name = self.app_combo.currentText()
+        
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["default_rule"] = current_key
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            self.config = config_data
+            self.statusBar().showMessage(f"Default rule set to '{display_name}'")
+            logger.info(f"Config: default_rule set to '{current_key}' ({display_name})")
+        except Exception as e:
+            logger.error(f"Config: failed to save default_rule: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save default rule:\n{e}")
+    
+    def _on_clear_default_rule(self):
+        """Clear the default rule setting from config."""
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["default_rule"] = ""
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            self.config = config_data
+            self.statusBar().showMessage("Default rule cleared")
+            logger.info("Config: default_rule cleared")
+        except Exception as e:
+            logger.error(f"Config: failed to clear default_rule: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to clear default rule:\n{e}")
             
     def _check_permissions(self):
         """Check and warn about accessibility permissions."""
@@ -1006,22 +1263,29 @@ class TranscriptRecorderApp(QMainWindow):
             return
             
         self.selected_app_key = self.app_combo.currentData()
-        if self.selected_app_key and self.config:
-            app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
+        self._is_manual_mode = (self.selected_app_key == MANUAL_RECORDING_KEY)
+
+        if self.selected_app_key and self._discovered_rules:
+            app_config = self._discovered_rules.get(self.selected_app_key, {})
             self.capture_interval = app_config.get("monitor_interval_seconds", 30)
-            logger.debug(f"App selection changed: {self.selected_app_key} (capture interval: {self.capture_interval}s)")
+            logger.debug(f"App selection changed: {self.selected_app_key} "
+                         f"(manual={self._is_manual_mode}, capture interval: {self.capture_interval}s)")
             
     def _on_new_recording(self):
-        """Start a new recording session."""
-        if not self.selected_app_key or not self.config:
+        """Start a new recording session.
+
+        For the built-in Manual Recording rule no ``TranscriptRecorder`` is
+        created — the user edits the transcript text area directly.
+        """
+        if not self.selected_app_key or not self._discovered_rules:
             logger.warning("New session: no application selected")
             QMessageBox.warning(self, "No Application", "Please select a meeting application first.")
             return
             
-        app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
+        app_config = self._discovered_rules.get(self.selected_app_key, {})
         if not app_config:
-            logger.error(f"New session: no config found for {self.selected_app_key}")
-            QMessageBox.warning(self, "Configuration Error", f"No configuration found for {self.selected_app_key}")
+            logger.error(f"New session: no rule found for {self.selected_app_key}")
+            QMessageBox.warning(self, "Rule Error", f"No rule found for {self.selected_app_key}")
             return
             
         # Reset state
@@ -1036,7 +1300,39 @@ class TranscriptRecorderApp(QMainWindow):
         self.current_recording_path = self.export_base_dir / "recordings" / year_folder / month_folder / folder_name
         self.snapshots_path = self.current_recording_path / ".snapshots"
         self.merged_transcript_path = self.current_recording_path / "meeting_transcript.txt"
+
+        if self._is_manual_mode:
+            # Manual Recording — no recorder instance; transcript is user-editable
+            self.recorder_instance = None
+            self.snapshot_count = 0
+            self.transcript_text.clear()
+            self.transcript_text.setReadOnly(False)
+            self.transcript_text.setPlaceholderText(
+                "Paste or type your transcript here...\n\n"
+                "Your text is saved automatically."
+            )
+            self.transcript_text.setToolTip("Lines: 0")
+
+            # Connect the text-changed signal so edits are auto-saved
+            self.transcript_text.textChanged.connect(self._on_manual_transcript_changed)
+
+            # Set default meeting date/time and clear other fields
+            self.meeting_datetime_input.setText(timestamp.strftime("%m/%d/%Y %I:%M %p"))
+            self.meeting_name_input.clear()
+            self.meeting_notes_input.clear()
+            self.meeting_details_dirty = False
+
+            self._update_button_states()
+            self.statusBar().showMessage(f"Manual recording — {folder_name}")
+            self._set_status("Manual mode — paste or type your transcript", "info")
+            logger.info(f"New session (manual): prepared (folder deferred: {self.current_recording_path})")
+
+            # Switch to transcript tab and focus the text area for immediate pasting
+            self.tab_widget.setCurrentIndex(1)
+            self.transcript_text.setFocus()
+            return
         
+        # --- Standard capture-based recording ---
         # Create recorder instance - snapshots go to the hidden .snapshots folder
         tr_config = app_config.copy()
         tr_config["base_transcript_directory"] = str(self.snapshots_path)
@@ -1052,6 +1348,14 @@ class TranscriptRecorderApp(QMainWindow):
         # Update UI
         self.snapshot_count = 0
         self.transcript_text.clear()
+        self.transcript_text.setReadOnly(True)
+        self.transcript_text.setPlaceholderText(
+            "Transcript will appear here after recording starts...\n\n"
+            "To begin:\n"
+            "1. Select your meeting application above\n"
+            "2. Make sure your meeting has captions/transcript enabled\n"
+            "3. Click 'New' then 'Capture' or 'Auto Capture'"
+        )
         self.transcript_text.setToolTip("Lines: 0")
         
         # Set default meeting date/time and clear other fields
@@ -1083,6 +1387,15 @@ class TranscriptRecorderApp(QMainWindow):
                 return
             self._on_stop_recording()
             
+        # Tear down manual-mode state if active
+        if self._is_manual_mode:
+            try:
+                self.transcript_text.textChanged.disconnect(self._on_manual_transcript_changed)
+            except (TypeError, RuntimeError):
+                pass  # already disconnected
+            if self._manual_save_timer:
+                self._manual_save_timer.stop()
+
         self.recorder_instance = None
         self.current_recording_path = None
         self.snapshots_path = None
@@ -1090,6 +1403,14 @@ class TranscriptRecorderApp(QMainWindow):
         self.snapshot_count = 0
         self._last_merged_line_count = 0
         self.transcript_text.clear()
+        self.transcript_text.setReadOnly(True)
+        self.transcript_text.setPlaceholderText(
+            "Transcript will appear here after recording starts...\n\n"
+            "To begin:\n"
+            "1. Select your meeting application above\n"
+            "2. Make sure your meeting has captions/transcript enabled\n"
+            "3. Click 'New' then 'Capture' or 'Auto Capture'"
+        )
         self.transcript_text.setToolTip("Lines: 0")
         
         # Clear meeting details
@@ -1109,6 +1430,10 @@ class TranscriptRecorderApp(QMainWindow):
         # Switch back to Meeting Details tab
         self.tab_widget.setCurrentIndex(0)
         
+        # Restore the default rule selection
+        if self.app_combo.count() > 0:
+            self._apply_default_rule()
+        
         self._update_button_states()
         self._set_status("Ready")
         self.statusBar().showMessage("Recording reset")
@@ -1122,18 +1447,18 @@ class TranscriptRecorderApp(QMainWindow):
         if not self.current_recording_path:
             return False
         
-        if not self.selected_app_key or not self.config:
+        if not self.selected_app_key or not self._discovered_rules:
             QMessageBox.warning(
                 self, "No Application Selected",
                 "Please select a meeting application before capturing."
             )
             return False
         
-        app_config = self.config.get("application_settings", {}).get(self.selected_app_key, {})
+        app_config = self._discovered_rules.get(self.selected_app_key, {})
         if not app_config:
             QMessageBox.warning(
-                self, "Configuration Error",
-                f"No configuration found for {self.selected_app_key}"
+                self, "Rule Error",
+                f"No rule found for {self.selected_app_key}"
             )
             return False
         
@@ -1346,6 +1671,53 @@ class TranscriptRecorderApp(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to update transcript display: {e}")
             
+    # --- Manual Recording helpers ---
+
+    def _on_manual_transcript_changed(self):
+        """Debounced auto-save for manual transcript edits.
+
+        Starts (or restarts) a 500 ms single-shot timer so that rapid
+        typing/pasting doesn't trigger a disk write on every keystroke.
+        """
+        if not self._is_manual_mode:
+            return
+
+        # Update line-count tooltip live
+        line_count = len(self.transcript_text.toPlainText().splitlines())
+        self.transcript_text.setToolTip(f"Lines: {line_count}")
+
+        if self._manual_save_timer is None:
+            self._manual_save_timer = QTimer(self)
+            self._manual_save_timer.setSingleShot(True)
+            self._manual_save_timer.timeout.connect(self._save_manual_transcript)
+
+        self._manual_save_timer.start(500)  # 500 ms debounce
+
+    def _save_manual_transcript(self):
+        """Write the current transcript text to meeting_transcript.txt."""
+        if not self.current_recording_path or not self.merged_transcript_path:
+            return
+
+        # Ensure the recording folder exists (deferred from New Recording)
+        if not self._ensure_recording_folder():
+            return
+
+        text = self.transcript_text.toPlainText()
+        try:
+            self.merged_transcript_path.write_text(text, encoding="utf-8")
+            line_count = len(text.splitlines())
+            self._last_merged_line_count = line_count
+            self.copy_btn.setEnabled(bool(text.strip()))
+            self.refresh_transcript_btn.setEnabled(bool(text.strip()))
+            self.open_folder_btn.setEnabled(bool(text.strip()))
+
+            # Also persist meeting details if dirty
+            self._save_meeting_details()
+
+            logger.debug(f"Manual transcript saved ({line_count} lines)")
+        except OSError as e:
+            logger.error(f"Failed to save manual transcript: {e}")
+
     def _copy_tool_output(self):
         """Copy tool output text area contents to clipboard."""
         text = self.tool_output_area.toPlainText()
@@ -1542,13 +1914,25 @@ class TranscriptRecorderApp(QMainWindow):
         has_session = has_recorder or self.current_recording_path is not None
         has_content = self.snapshot_count > 0
         has_transcript_text = has_content or bool(self.transcript_text.toPlainText().strip())
-        
-        self.app_combo.setEnabled(not has_session)
-        self.new_btn.setEnabled(not has_session and self._has_accessibility)
+
+        # Manual Recording doesn't require accessibility and allows New
+        # without accessibility permissions, but does not support capture.
+        if self._is_manual_mode:
+            self.app_combo.setEnabled(not has_session)
+            self.new_btn.setEnabled(not has_session)
+        else:
+            self.app_combo.setEnabled(not has_session and self._has_accessibility)
+            self.new_btn.setEnabled(not has_session and self._has_accessibility)
+
         self.reset_btn.setEnabled(has_session)
-        
-        self.capture_btn.setEnabled(has_session and not self._is_capturing and self._has_accessibility)
-        self.auto_capture_btn.setEnabled(has_session and not self._is_capturing and self._has_accessibility)
+
+        # Capture buttons are disabled in manual mode — there is nothing to capture
+        if self._is_manual_mode:
+            self.capture_btn.setEnabled(False)
+            self.auto_capture_btn.setEnabled(False)
+        else:
+            self.capture_btn.setEnabled(has_recorder and not self._is_capturing and self._has_accessibility)
+            self.auto_capture_btn.setEnabled(has_recorder and not self._is_capturing and self._has_accessibility)
         
         self.tab_widget.setEnabled(has_session)
         
@@ -2398,8 +2782,8 @@ class TranscriptRecorderApp(QMainWindow):
             f'<p>GitHub: <a href="{github_url}">{github_url}</a></p>'
         )
     
-    def _toggle_privacy_mode(self, checked: bool):
-        """Toggle macOS window sharing type to hide/show in screen recordings."""
+    def _set_privacy_mode(self, hidden: bool):
+        """Set macOS window sharing type to hide or show in screen recordings."""
         if not _HAS_APPKIT:
             return
         
@@ -2408,28 +2792,71 @@ class TranscriptRecorderApp(QMainWindow):
             title = self.windowTitle()
             for ns_window in NSApp().windows():
                 if ns_window.title() == title:
-                    ns_window.setSharingType_(0 if checked else 1)
+                    ns_window.setSharingType_(0 if hidden else 1)
                     break
             
-            if checked:
+            # Update menu checkmarks
+            if hasattr(self, 'privacy_hide_action'):
+                self.privacy_hide_action.setChecked(hidden)
+            if hasattr(self, 'privacy_show_action'):
+                self.privacy_show_action.setChecked(not hidden)
+            
+            if hidden:
                 self.statusBar().showMessage("Window hidden from screen sharing")
                 logger.info("Privacy: window hidden from screen sharing")
             else:
                 self.statusBar().showMessage("Window visible to screen sharing")
                 logger.info("Privacy: window visible to screen sharing")
         except Exception as e:
-            logger.error(f"Privacy: failed to toggle sharing type: {e}")
+            logger.error(f"Privacy: failed to set sharing type: {e}")
+    
+    def _change_privacy_default(self):
+        """Prompt the user to choose the default screen sharing privacy setting."""
+        current_hidden = True
+        if self.config:
+            current_hidden = self.config.get("client_settings", {}).get(
+                "screen_sharing_hidden", True
+            )
+        
+        items = ["Hidden (default)", "Visible"]
+        current_index = 0 if current_hidden else 1
+        
+        item, ok = QInputDialog.getItem(
+            self, "Screen Sharing Privacy Default",
+            "Choose the default screen sharing privacy\n"
+            "setting when the application starts:",
+            items, current_index, False
+        )
+        if not ok:
+            return
+        
+        new_hidden = item.startswith("Hidden")
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["screen_sharing_hidden"] = new_hidden
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            self.config = config_data
+            self._set_privacy_mode(new_hidden)
+            label = "Hidden" if new_hidden else "Visible"
+            self.statusBar().showMessage(f"Privacy default set to: {label}")
+            logger.info(f"Privacy default saved: screen_sharing_hidden={new_hidden}")
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Error",
+                f"Failed to save privacy default:\n{e}"
+            )
     
     def _show_log_viewer(self):
         """Open the log viewer window."""
         self.log_viewer = LogViewerDialog(self)
         self.log_viewer.show()
-    
-    def _show_config_editor(self):
-        """Open the configuration editor window."""
-        self.config_editor = ConfigEditorDialog(self)
-        self.config_editor.config_saved.connect(self._reload_configuration)
-        self.config_editor.show()
     
     def _show_tool_import(self):
         """Open the Tool Import dialog."""
@@ -2528,6 +2955,63 @@ class TranscriptRecorderApp(QMainWindow):
         tools_dir = self.export_base_dir / "tools"
         tools_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(["open", str(tools_dir)])
+
+    def _show_rule_import(self):
+        """Open the Rule Import dialog."""
+        from gui.rule_dialogs import RuleImportDialog
+        rules_dir = self.export_base_dir / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        self._rule_import_dialog = RuleImportDialog(rules_dir, self)
+        self._rule_import_dialog.rules_imported.connect(self._scan_rules)
+        self._rule_import_dialog.show()
+
+    def _show_rule_editor(self):
+        """Open the Rule Editor for a selected rule."""
+        from gui.rule_editor import RuleEditorDialog
+        rules_dir = self.export_base_dir / "rules"
+        if not rules_dir.exists():
+            QMessageBox.information(self, "No Rules", "No rules directory found.")
+            return
+
+        rule_dirs = sorted(
+            p for p in rules_dir.iterdir()
+            if p.is_dir() and (p / "rule.json").exists()
+        )
+
+        if not rule_dirs:
+            QMessageBox.information(
+                self, "No Rules",
+                "No rules with a rule.json file were found.\n\n"
+                "Use Rules > Import Rules to install rules first."
+            )
+            return
+
+        if len(rule_dirs) == 1:
+            chosen = rule_dirs[0]
+        else:
+            names = [d.name for d in rule_dirs]
+            name, ok = QInputDialog.getItem(
+                self,
+                "Select Rule",
+                "Choose a rule to edit:",
+                names,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            chosen = rules_dir / name
+
+        rule_json_path = chosen / "rule.json"
+        self._rule_editor = RuleEditorDialog(rule_json_path, self)
+        self._rule_editor.rule_saved.connect(self._scan_rules)
+        self._rule_editor.show()
+
+    def _open_rules_folder(self):
+        """Open the rules directory in Finder."""
+        rules_dir = self.export_base_dir / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(rules_dir)])
     
     def _reload_configuration(self):
         """Reload the configuration file."""
@@ -2537,17 +3021,32 @@ class TranscriptRecorderApp(QMainWindow):
             
             setup_logging(self.config)
             
+            # Sync Log Level menu radio buttons with reloaded config
+            saved_level = self.config.get("logging", {}).get("level", "INFO").upper()
+            for action in self._log_level_group.actions():
+                action.setChecked(action.text() == saved_level)
+            
             client_settings = self.config.get("client_settings", {})
-            export_dir = client_settings.get("export_directory", str(DEFAULT_EXPORT_DIR))
+            export_dir = client_settings.get("export_directory", "").strip()
+
+            if not export_dir:
+                export_dir = self._prompt_for_export_directory()
+                if not export_dir:
+                    QMessageBox.warning(
+                        self, "Export Directory Required",
+                        "No export directory is configured. Some features may not work."
+                    )
+                    return
+
             self.export_base_dir = Path(export_dir).expanduser().resolve()
             self.export_base_dir.mkdir(parents=True, exist_ok=True)
             (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
+            (self.export_base_dir / "rules").mkdir(parents=True, exist_ok=True)
             
-            self._populate_app_combo()
+            self._scan_rules()
             self._scan_tools()
             
-            app_count = len(self.config.get("application_settings", {}))
-            logger.info(f"Config: reloaded from {CONFIG_PATH} ({app_count} apps)")
+            logger.info(f"Config: reloaded from {CONFIG_PATH} ({len(self._discovered_rules)} rules)")
             self.statusBar().showMessage("Configuration reloaded")
             
         except json.JSONDecodeError as e:
@@ -2561,6 +3060,49 @@ class TranscriptRecorderApp(QMainWindow):
                 f"Failed to reload configuration:\n{e}"
             )
     
+    def _prompt_for_export_directory(self) -> Optional[str]:
+        """Show a file dialog to pick an export directory and persist it to config.
+
+        Called when export_directory is blank (first launch or after reset).
+        Returns the chosen directory path string, or None if the user cancelled.
+        """
+        QMessageBox.information(
+            self, "Export Directory Required",
+            "Please choose a folder where recordings, transcripts,\n"
+            "and tool data will be saved."
+        )
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Export Directory",
+            str(DEFAULT_EXPORT_DIR),
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if not chosen_dir:
+            return None
+
+        # Persist the choice to the config file
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["export_directory"] = chosen_dir
+
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+
+            # Keep the in-memory config in sync
+            if self.config:
+                self.config.setdefault("client_settings", {})["export_directory"] = chosen_dir
+
+            logger.info(f"Export directory set to {chosen_dir}")
+        except Exception as e:
+            logger.error(f"Failed to save export directory to config: {e}")
+
+        return chosen_dir
+
     def _change_export_directory(self):
         """Let the user pick a new export directory and persist the change."""
         new_dir = QFileDialog.getExistingDirectory(
@@ -2594,6 +3136,69 @@ class TranscriptRecorderApp(QMainWindow):
                 f"Failed to update export directory:\n{e}"
             )
     
+    def _set_log_level(self, level_name: str):
+        """Change the logging level for the current session (does not change default)."""
+        # Reconfigure logging in-place
+        if self.config is None:
+            self.config = {}
+        if "logging" not in self.config:
+            self.config["logging"] = {}
+        self.config["logging"]["level"] = level_name
+        setup_logging(self.config)
+        
+        if level_name == "NONE":
+            self.statusBar().showMessage("Logging disabled for this session")
+        else:
+            logger.info(f"Log level changed to {level_name}")
+            self.statusBar().showMessage(f"Log level set to {level_name}")
+    
+    def _change_log_level_default(self):
+        """Prompt the user to choose the default logging level saved to config."""
+        current_level = "INFO"
+        if self.config:
+            current_level = self.config.get("logging", {}).get("level", "INFO").upper()
+        
+        items = ["DEBUG", "INFO", "WARNING", "ERROR", "NONE"]
+        current_index = items.index(current_level) if current_level in items else 1
+        
+        item, ok = QInputDialog.getItem(
+            self, "Default Log Level",
+            "Choose the default logging level used\n"
+            "when the application starts:",
+            items, current_index, False
+        )
+        if not ok:
+            return
+        
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            if "logging" not in config_data:
+                config_data["logging"] = {}
+            config_data["logging"]["level"] = item
+            
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            
+            self.config = config_data
+            setup_logging(self.config)
+            
+            # Update the radio-button checks in the Log Level submenu
+            for action in self._log_level_group.actions():
+                action.setChecked(action.text() == item)
+            
+            if item == "NONE":
+                self.statusBar().showMessage("Default log level set to: NONE (disabled)")
+            else:
+                logger.info(f"Default log level saved: {item}")
+                self.statusBar().showMessage(f"Default log level set to: {item}")
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Error",
+                f"Failed to save log level default:\n{e}"
+            )
+
     def _clear_log_file(self):
         """Clear the log file."""
         if _constants.current_log_file_path is None:
@@ -2942,7 +3547,7 @@ def main():
     app.setOrganizationName("TranscriptRecorder")
     
     # Set app icon
-    icon_path = resource_path("transcriber.icns")
+    icon_path = resource_path("appicon.icns")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     

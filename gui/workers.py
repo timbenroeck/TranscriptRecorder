@@ -597,3 +597,137 @@ class ToolFetchWorker(QThread):
             # Make scripts executable
             if file_name.endswith(".sh"):
                 dest.chmod(dest.stat().st_mode | 0o111)
+
+
+# ---------------------------------------------------------------------------
+# Rule Import / Management
+# ---------------------------------------------------------------------------
+
+class RuleFetchWorker(QThread):
+    """Background worker to list and download rules from a GitHub repo's rules/ directory.
+
+    Mirrors ``ToolFetchWorker`` but targets rules (``rule.json`` + ``rule.json.sha256``).
+    """
+
+    listing_ready = pyqtSignal(list)        # [{name, url, ...}, ...]
+    error = pyqtSignal(str)
+    download_progress = pyqtSignal(str)
+    download_finished = pyqtSignal(list, list)  # (installed_names, error_messages)
+
+    def __init__(self, api_url: str, parent=None):
+        super().__init__(parent)
+        self.api_url = api_url
+        self._rules_to_download: List[dict] = []
+        self._local_rules_dir: Optional[Path] = None
+        self._mode = "list"
+
+    def start_download(self, rules: List[dict], local_rules_dir: Path):
+        self._rules_to_download = rules
+        self._local_rules_dir = local_rules_dir
+        self._mode = "download"
+        self.start()
+
+    def run(self):
+        if self._mode == "download":
+            self._run_download()
+        else:
+            self._run_list()
+
+    def _run_list(self):
+        try:
+            req = urllib.request.Request(
+                self.api_url,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            if not isinstance(data, list):
+                self.error.emit("Unexpected response from GitHub API (expected a list).")
+                return
+
+            rule_dirs = [
+                {
+                    "name": item["name"],
+                    "url": item["url"],
+                    "html_url": item.get("html_url", ""),
+                }
+                for item in data
+                if item.get("type") == "dir"
+            ]
+            self.listing_ready.emit(rule_dirs)
+
+        except urllib.error.HTTPError as e:
+            self.error.emit(f"HTTP {e.code}: {e.reason}\n\nURL: {self.api_url}")
+        except urllib.error.URLError as e:
+            self.error.emit(f"Connection error: {e.reason}")
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def _run_download(self):
+        installed: List[str] = []
+        errors: List[str] = []
+
+        for rule in self._rules_to_download:
+            name = rule["name"]
+            self.download_progress.emit(f"Downloading {name}...")
+            try:
+                self._download_rule(rule)
+                installed.append(name)
+            except Exception as e:
+                logger.error(f"Rule import: failed to download {name}: {e}", exc_info=True)
+                errors.append(f"{name}: {e}")
+
+        self.download_finished.emit(installed, errors)
+
+    def _download_rule(self, rule: dict):
+        """Download all files for a single rule directory."""
+        from gui.versioning import backup_json_file
+
+        name = rule["name"]
+        contents_url = rule["url"]
+
+        req = urllib.request.Request(
+            contents_url,
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            files = json.loads(resp.read().decode("utf-8"))
+
+        if not isinstance(files, list):
+            raise ValueError(f"Unexpected response listing files for {name}")
+
+        local_dir = self._local_rules_dir / name
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        # Backup existing rule.json before overwriting
+        local_rule_json = local_dir / "rule.json"
+        if local_rule_json.exists():
+            backup_json_file(local_rule_json)
+
+        for item in files:
+            if item.get("type") != "file":
+                continue
+            download_url = item.get("download_url")
+            if not download_url:
+                continue
+
+            file_name = item["name"]
+            self.download_progress.emit(f"  {name}/{file_name}")
+
+            file_req = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"},
+            )
+            with urllib.request.urlopen(file_req, timeout=30) as file_resp:
+                content = file_resp.read()
+
+            dest = local_dir / file_name
+            with open(dest, "wb") as f:
+                f.write(content)

@@ -1,0 +1,103 @@
+name: Notarize Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Run ID of the Build and Release workflow (find in the URL of the build run)'
+        required: true
+        type: string
+      version:
+        description: 'Version number (e.g. 1.2.3) — must match the DMG artifact name'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # Required to update release assets
+
+jobs:
+  notarize:
+    runs-on: macos-latest
+
+    steps:
+      - name: Download signed DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TranscriptRecorder-${{ inputs.version }}
+          path: dist/
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify DMG exists
+        run: |
+          DMG_PATH="dist/TranscriptRecorder-${{ inputs.version }}.dmg"
+          if [ ! -f "$DMG_PATH" ]; then
+            echo "ERROR: DMG not found at $DMG_PATH"
+            echo "Available files in dist/:"
+            ls -la dist/
+            exit 1
+          fi
+          echo "Found DMG: $DMG_PATH"
+          echo "Size: $(du -h "$DMG_PATH" | cut -f1)"
+
+      # =============================================================
+      # NOTARIZATION: Submit to Apple and staple the ticket
+      # =============================================================
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG_PATH="dist/TranscriptRecorder-${{ inputs.version }}.dmg"
+
+          echo "Submitting for notarization..."
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
+
+          echo "Stapling notarization ticket to DMG..."
+          xcrun stapler staple "$DMG_PATH"
+
+          echo "Verifying notarization..."
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
+
+      - name: Upload notarized DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TranscriptRecorder-${{ inputs.version }}-notarized
+          path: dist/*.dmg
+
+      # =============================================================
+      # UPDATE RELEASE: Replace the DMG on the existing GitHub Release
+      # =============================================================
+      - name: Update GitHub Release with notarized DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          DMG_NAME="TranscriptRecorder-${{ inputs.version }}.dmg"
+          DMG_PATH="dist/$DMG_NAME"
+
+          # Check if a release exists for this tag
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Found release for tag $TAG — replacing DMG asset..."
+
+            # Delete the old (un-notarized) DMG asset if it exists
+            gh release delete-asset "$TAG" "$DMG_NAME" \
+              --repo "${{ github.repository }}" \
+              --yes 2>/dev/null || echo "No existing asset to replace"
+
+            # Upload the notarized DMG
+            gh release upload "$TAG" "$DMG_PATH" \
+              --repo "${{ github.repository }}" \
+              --clobber
+
+            echo "Release $TAG updated with notarized DMG"
+          else
+            echo "No release found for tag $TAG — skipping release update"
+            echo "The notarized DMG is available as a workflow artifact"
+          fi

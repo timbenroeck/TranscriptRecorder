@@ -86,9 +86,13 @@ git push origin --tags
 When you push a tag starting with `v` (e.g., `v1.0.1`), GitHub Actions will automatically:
 
 1. Build the macOS application using py2app
-2. Create a DMG installer
-3. Create a GitHub Release with the DMG attached
-4. Generate release notes from commit messages
+2. Code-sign the `.app` bundle with your Developer ID certificate
+3. Create and sign a DMG installer
+4. Notarize the DMG with Apple's notary service and staple the ticket
+5. Create a GitHub Release with the signed, notarized DMG attached
+6. Generate release notes from commit messages
+
+> See [docs/CODE_SIGNING.md](CODE_SIGNING.md) for full details on the signing and notarization process.
 
 ### Manual Build (Without GitHub Actions)
 
