@@ -58,6 +58,7 @@ class _CommandPathsEditor(QWidget):
         btn.setSpacing(6)
 
         add_btn = QPushButton("+ Add")
+        add_btn.setProperty("class", "secondary-action")
         add_btn.clicked.connect(self._add_row)
         btn.addWidget(add_btn)
 
@@ -66,6 +67,7 @@ class _CommandPathsEditor(QWidget):
         btn.addWidget(browse_btn)
 
         remove_btn = QPushButton("- Remove")
+        remove_btn.setProperty("class", "danger-outline")
         remove_btn.clicked.connect(self._remove_row)
         btn.addWidget(remove_btn)
 
@@ -136,10 +138,12 @@ class _RolesToSkipEditor(QWidget):
         btn.setSpacing(6)
 
         add_btn = QPushButton("+ Add")
+        add_btn.setProperty("class", "secondary-action")
         add_btn.clicked.connect(self._add_row)
         btn.addWidget(add_btn)
 
         remove_btn = QPushButton("- Remove")
+        remove_btn.setProperty("class", "danger-outline")
         remove_btn.clicked.connect(self._remove_row)
         btn.addWidget(remove_btn)
 
@@ -202,10 +206,12 @@ class _TextElementRolesEditor(QWidget):
         btn.setSpacing(6)
 
         add_btn = QPushButton("+ Add")
+        add_btn.setProperty("class", "secondary-action")
         add_btn.clicked.connect(self._add_row)
         btn.addWidget(add_btn)
 
         remove_btn = QPushButton("- Remove")
+        remove_btn.setProperty("class", "danger-outline")
         remove_btn.clicked.connect(self._remove_row)
         btn.addWidget(remove_btn)
 
@@ -386,10 +392,12 @@ class _PathEditor(QGroupBox):
         step_btn.setSpacing(6)
 
         add_step_btn = QPushButton("+ Add Step")
+        add_step_btn.setProperty("class", "secondary-action")
         add_step_btn.clicked.connect(self._add_step)
         step_btn.addWidget(add_step_btn)
 
         remove_step_btn = QPushButton("- Remove Last Step")
+        remove_step_btn.setProperty("class", "danger-outline")
         remove_step_btn.clicked.connect(self._remove_last_step)
         step_btn.addWidget(remove_step_btn)
 
@@ -561,11 +569,12 @@ class RuleEditorDialog(QMainWindow):
         path_btns.setSpacing(6)
 
         add_path_btn = QPushButton("+ Add Search Path")
-        add_path_btn.setProperty("class", "primary")
+        add_path_btn.setProperty("class", "secondary-action")
         add_path_btn.clicked.connect(self._add_path)
         path_btns.addWidget(add_path_btn)
 
         remove_path_btn = QPushButton("- Remove Last Path")
+        remove_path_btn.setProperty("class", "danger-outline")
         remove_path_btn.clicked.connect(self._remove_last_path)
         path_btns.addWidget(remove_path_btn)
 
@@ -579,6 +588,7 @@ class RuleEditorDialog(QMainWindow):
 
         # --- Status + Buttons ---
         self.status_label = QLabel("")
+        self.status_label.setObjectName("dialog_status")
         main_layout.addWidget(self.status_label)
 
         btn_layout = QHBoxLayout()
@@ -591,7 +601,7 @@ class RuleEditorDialog(QMainWindow):
         btn_layout.addStretch()
 
         save_btn = QPushButton("Save")
-        save_btn.setProperty("class", "success")
+        save_btn.setProperty("class", "action")
         save_btn.clicked.connect(self._save)
         btn_layout.addWidget(save_btn)
 
@@ -604,6 +614,13 @@ class RuleEditorDialog(QMainWindow):
         # Load initial data
         self._load()
 
+    def _set_status(self, text: str, state: str = ""):
+        """Set status label text with themed state (info, success, warn, error, or empty)."""
+        self.status_label.setText(text)
+        self.status_label.setProperty("status_state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
     def _mark_modified(self):
         self._is_modified = True
         self.status_label.setText("")
@@ -612,8 +629,7 @@ class RuleEditorDialog(QMainWindow):
         """Load rule.json into the form."""
         try:
             if not self._rule_json_path.exists():
-                self.status_label.setText("Rule file not found.")
-                self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+                self._set_status("Rule file not found.", "warn")
                 return
 
             with open(self._rule_json_path, 'r', encoding='utf-8') as f:
@@ -651,11 +667,9 @@ class RuleEditorDialog(QMainWindow):
             self.status_label.setText("")
 
         except json.JSONDecodeError as e:
-            self.status_label.setText(f"Invalid JSON: {e}")
-            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            self._set_status(f"Invalid JSON: {e}", "error")
         except Exception as e:
-            self.status_label.setText(f"Error loading rule: {e}")
-            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            self._set_status(f"Error loading rule: {e}", "error")
             logger.error(f"RuleEditor: failed to load {self._rule_json_path}: {e}")
 
     def _reload(self):
@@ -669,8 +683,7 @@ class RuleEditorDialog(QMainWindow):
             if reply == QMessageBox.StandardButton.No:
                 return
         self._load()
-        self.status_label.setText("Reloaded from disk.")
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status("Reloaded from disk.", "info")
 
     def _save(self):
         """Build the rule dict from form widgets and write to rule.json."""
@@ -708,8 +721,7 @@ class RuleEditorDialog(QMainWindow):
                 f.write(formatted)
 
             self._is_modified = False
-            self.status_label.setText("Saved")
-            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            self._set_status("✓ Saved", "success")
             logger.info(f"RuleEditor: saved {self._rule_json_path}")
             self.rule_saved.emit()
 

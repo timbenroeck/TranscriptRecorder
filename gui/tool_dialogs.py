@@ -77,7 +77,7 @@ class ToolImportDialog(QMainWindow):
         url_layout.addWidget(self.url_field, stretch=1)
 
         self.fetch_btn = QPushButton("Fetch")
-        self.fetch_btn.setProperty("class", "primary")
+        self.fetch_btn.setProperty("class", "action")
         self.fetch_btn.clicked.connect(self._on_fetch)
         url_layout.addWidget(self.fetch_btn)
 
@@ -104,6 +104,7 @@ class ToolImportDialog(QMainWindow):
 
         # --- Status label ---
         self.status_label = QLabel("")
+        self.status_label.setObjectName("dialog_status")
         layout.addWidget(self.status_label)
 
         # --- Button row ---
@@ -121,7 +122,7 @@ class ToolImportDialog(QMainWindow):
         btn_layout.addStretch()
 
         self.install_btn = QPushButton("Install Selected")
-        self.install_btn.setProperty("class", "success")
+        self.install_btn.setProperty("class", "primary")
         self.install_btn.setEnabled(False)
         self.install_btn.clicked.connect(self._on_install)
         btn_layout.addWidget(self.install_btn)
@@ -132,18 +133,24 @@ class ToolImportDialog(QMainWindow):
 
         layout.addLayout(btn_layout)
 
+    # -- Status helper --
+    def _set_status(self, text: str, state: str = ""):
+        """Set status label text with themed state (info, success, warn, error, or empty)."""
+        self.status_label.setText(text)
+        self.status_label.setProperty("status_state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
     # -- Fetch available tools --
     def _on_fetch(self):
         url = self.url_field.text().strip()
         if not url:
-            self.status_label.setText("Please enter a URL.")
-            self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+            self._set_status("Please enter a URL.", "warn")
             return
 
         self.fetch_btn.setEnabled(False)
         self.install_btn.setEnabled(False)
-        self.status_label.setText("Fetching tool list...")
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status("Fetching tool list...", "info")
         QApplication.processEvents()
 
         self._worker = ToolFetchWorker(url)
@@ -180,14 +187,15 @@ class ToolImportDialog(QMainWindow):
             self.tool_table.setItem(row_idx, 2, status_item)
 
         count = len(tools)
-        self.status_label.setText(f"Found {count} tool(s)." if count else "No tools found in this repository.")
-        self.status_label.setStyleSheet("color: #34C759; font-size: 12px;" if count else "color: #FF9500; font-size: 12px;")
+        if count:
+            self._set_status(f"Found {count} tool(s).", "success")
+        else:
+            self._set_status("No tools found in this repository.", "warn")
         self.fetch_btn.setEnabled(True)
         self.install_btn.setEnabled(count > 0)
 
     def _on_fetch_error(self, message: str):
-        self.status_label.setText(f"Fetch failed: {message}")
-        self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+        self._set_status(f"Fetch failed: {message}", "error")
         self.fetch_btn.setEnabled(True)
         logger.error(f"Tool import: fetch error: {message}")
 
@@ -222,14 +230,12 @@ class ToolImportDialog(QMainWindow):
     def _on_install(self):
         selected = self._get_selected_tools()
         if not selected:
-            self.status_label.setText("No tools selected.")
-            self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+            self._set_status("No tools selected.", "warn")
             return
 
         self.install_btn.setEnabled(False)
         self.fetch_btn.setEnabled(False)
-        self.status_label.setText("Installing...")
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status("Installing...", "info")
         QApplication.processEvents()
 
         self._worker = ToolFetchWorker(self.url_field.text().strip())
@@ -238,8 +244,7 @@ class ToolImportDialog(QMainWindow):
         self._worker.start_download(selected, self._local_tools_dir)
 
     def _on_download_progress(self, message: str):
-        self.status_label.setText(message)
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status(message, "info")
         QApplication.processEvents()
 
     def _on_download_finished(self, installed: list, errors: list):
@@ -290,12 +295,10 @@ class ToolImportDialog(QMainWindow):
             QMessageBox.information(self, "Tools Installed", msg)
             self.tools_imported.emit()
 
-            self.status_label.setText(f"Installed {len(installed)} tool(s)")
-            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            self._set_status(f"Installed {len(installed)} tool(s)", "success")
             logger.info(f"Tool import: installed {installed}")
         else:
-            self.status_label.setText("No tools were installed.")
-            self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+            self._set_status("No tools were installed.", "warn")
 
     def _compute_tool_status(self, tool_name: str) -> str:
         """Compute install status for a tool using .sha256 hash files."""
@@ -356,6 +359,7 @@ class ToolJsonEditorDialog(QMainWindow):
 
         # Status label
         self.status_label = QLabel("")
+        self.status_label.setObjectName("dialog_status")
         layout.addWidget(self.status_label)
 
         # Buttons
@@ -369,12 +373,12 @@ class ToolJsonEditorDialog(QMainWindow):
         btn_layout.addStretch()
 
         save_btn = QPushButton("Save")
-        save_btn.setProperty("class", "success")
+        save_btn.setProperty("class", "action")
         save_btn.clicked.connect(self._save)
         btn_layout.addWidget(save_btn)
 
         validate_btn = QPushButton("Validate JSON")
-        validate_btn.setProperty("class", "primary")
+        validate_btn.setProperty("class", "secondary-action")
         validate_btn.clicked.connect(self._validate)
         btn_layout.addWidget(validate_btn)
 
@@ -386,6 +390,13 @@ class ToolJsonEditorDialog(QMainWindow):
 
         # Load initial content
         self._load()
+
+    def _set_status(self, text: str, state: str = ""):
+        """Set status label text with themed state (info, success, warn, error, or empty)."""
+        self.status_label.setText(text)
+        self.status_label.setProperty("status_state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
 
     def _on_text_changed(self):
         self._is_modified = True
@@ -401,22 +412,18 @@ class ToolJsonEditorDialog(QMainWindow):
                 self.status_label.setText("")
             else:
                 self.text_edit.setPlainText("{}")
-                self.status_label.setText("File not found — starting with empty JSON.")
-                self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+                self._set_status("File not found — starting with empty JSON.", "warn")
         except Exception as e:
             self.text_edit.setPlainText("")
-            self.status_label.setText(f"Error loading: {e}")
-            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            self._set_status(f"Error loading: {e}", "error")
 
     def _validate(self) -> bool:
         try:
             json.loads(self.text_edit.toPlainText())
-            self.status_label.setText("✓ Valid JSON")
-            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            self._set_status("✓ Valid JSON", "success")
             return True
         except json.JSONDecodeError as e:
-            self.status_label.setText(f"✗ Invalid JSON: {e}")
-            self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            self._set_status(f"✗ Invalid JSON: {e}", "error")
             return False
 
     def _save(self):
@@ -437,8 +444,7 @@ class ToolJsonEditorDialog(QMainWindow):
 
             self.text_edit.setPlainText(formatted)
             self._is_modified = False
-            self.status_label.setText("✓ Saved")
-            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            self._set_status("✓ Saved", "success")
             logger.info(f"Tool config editor: saved {self._tool_json_path}")
             self.config_saved.emit()
         except Exception as e:

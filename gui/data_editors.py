@@ -78,10 +78,12 @@ class KeyArrayGridEditor(BaseDataEditor):
         btn_layout.setSpacing(6)
 
         add_btn = QPushButton("+ Add Row")
+        add_btn.setProperty("class", "secondary-action")
         add_btn.clicked.connect(self._add_row)
         btn_layout.addWidget(add_btn)
 
         delete_btn = QPushButton("- Delete Row")
+        delete_btn.setProperty("class", "danger-outline")
         delete_btn.clicked.connect(self._delete_row)
         btn_layout.addWidget(delete_btn)
 
@@ -204,10 +206,12 @@ class KeyValueGridEditor(BaseDataEditor):
         btn_layout.setSpacing(6)
 
         add_btn = QPushButton("+ Add Row")
+        add_btn.setProperty("class", "secondary-action")
         add_btn.clicked.connect(self._add_row)
         btn_layout.addWidget(add_btn)
 
         delete_btn = QPushButton("- Delete Row")
+        delete_btn.setProperty("class", "danger-outline")
         delete_btn.clicked.connect(self._delete_row)
         btn_layout.addWidget(delete_btn)
 
@@ -324,10 +328,12 @@ class StringListEditor(BaseDataEditor):
         btn_layout.setSpacing(6)
 
         add_btn = QPushButton("+ Add")
+        add_btn.setProperty("class", "secondary-action")
         add_btn.clicked.connect(self._add_row)
         btn_layout.addWidget(add_btn)
 
         delete_btn = QPushButton("- Delete")
+        delete_btn.setProperty("class", "danger-outline")
         delete_btn.clicked.connect(self._delete_row)
         btn_layout.addWidget(delete_btn)
 
@@ -528,6 +534,7 @@ class DataFileEditorDialog(QMainWindow):
 
         # Status
         self.status_label = QLabel("")
+        self.status_label.setObjectName("dialog_status")
         layout.addWidget(self.status_label)
 
         # Buttons
@@ -541,7 +548,7 @@ class DataFileEditorDialog(QMainWindow):
         btn_layout.addStretch()
 
         save_btn = QPushButton("Save")
-        save_btn.setProperty("class", "success")
+        save_btn.setProperty("class", "action")
         save_btn.clicked.connect(self._save)
         btn_layout.addWidget(save_btn)
 
@@ -608,6 +615,14 @@ class DataFileEditorDialog(QMainWindow):
         self.code_btn.style().unpolish(self.code_btn)
         self.code_btn.style().polish(self.code_btn)
 
+    # -- Status helper --
+    def _set_status(self, text: str, state: str = ""):
+        """Set status label text with themed state (info, success, warn, error, or empty)."""
+        self.status_label.setText(text)
+        self.status_label.setProperty("status_state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
     # -- Modification tracking --
 
     def _on_modified(self):
@@ -658,34 +673,29 @@ class DataFileEditorDialog(QMainWindow):
                     self.code_edit.setPlainText("{}")
                     self._code_loading = False
             except Exception as e:
-                self.status_label.setText(f"Error loading: {e}")
-                self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+                self._set_status(f"Error loading: {e}", "error")
                 return
             self._code_modified = False
 
-        self.status_label.setText("Reloaded from disk.")
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status("Reloaded from disk.", "info")
 
     # -- Save --
 
     def _save(self):
         if self._current_view == self._VIEW_EDITOR:
             if self.editor.save():
-                self.status_label.setText("✓ Saved")
-                self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+                self._set_status("✓ Saved", "success")
                 logger.info(f"DataFileEditor: saved {self._file_path}")
                 self.data_saved.emit()
             else:
-                self.status_label.setText("✗ Save failed — check the log for details")
-                self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+                self._set_status("✗ Save failed — check the log for details", "error")
         else:
             # Save from code view — validate, format, and write
             text = self.code_edit.toPlainText()
             try:
                 data = json.loads(text)
             except json.JSONDecodeError as e:
-                self.status_label.setText(f"✗ Invalid JSON: {e}")
-                self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+                self._set_status(f"✗ Invalid JSON: {e}", "error")
                 QMessageBox.warning(
                     self, "Invalid JSON",
                     f"Cannot save — the JSON is invalid:\n\n{e}"
@@ -704,13 +714,11 @@ class DataFileEditorDialog(QMainWindow):
                 self._code_modified = False
                 # Also reload the structured editor so it stays in sync
                 self.editor.load()
-                self.status_label.setText("✓ Saved")
-                self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+                self._set_status("✓ Saved", "success")
                 logger.info(f"DataFileEditor: saved {self._file_path} (from code view)")
                 self.data_saved.emit()
             except Exception as e:
-                self.status_label.setText(f"✗ Save failed: {e}")
-                self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+                self._set_status(f"✗ Save failed: {e}", "error")
 
     def closeEvent(self, event):
         if self._is_any_modified():

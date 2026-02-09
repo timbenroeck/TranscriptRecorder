@@ -427,4 +427,23 @@ def get_application_stylesheet(is_dark: bool, combo_arrow_path: str = "") -> str
             color: {disabled_text};
             border: none;
         }}
+
+        /* ========== Dialog Status Labels ========== */
+        QLabel#dialog_status {{
+            font-size: 12px;
+            color: {text_sec};
+            background-color: transparent;
+        }}
+        QLabel#dialog_status[status_state="info"] {{
+            color: {accent_blue};
+        }}
+        QLabel#dialog_status[status_state="success"] {{
+            color: {capture_green};
+        }}
+        QLabel#dialog_status[status_state="warn"] {{
+            color: {status_warn_text};
+        }}
+        QLabel#dialog_status[status_state="error"] {{
+            color: {danger_red};
+        }}
     """

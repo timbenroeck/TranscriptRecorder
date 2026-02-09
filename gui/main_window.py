@@ -43,7 +43,7 @@ from gui.workers import (
     UpdateCheckWorker, ToolFetchWorker,
     STREAM_PARSERS, _stream_parser_raw,
 )
-from gui.dialogs import LogViewerDialog
+from gui.dialogs import LogViewerDialog, PermissionsDialog, WelcomeDialog
 from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
 from gui.data_editors import DataFileEditorDialog
 
@@ -86,6 +86,7 @@ class TranscriptRecorderApp(QMainWindow):
         self._default_size = QSize(600, 450)
         self._maximized_size = QSize(960, 720)
         self._has_accessibility = True  # Assume granted; _check_permissions will update
+        self._closing = False  # Set when the app is about to exit (e.g. user cancelled setup)
         self._is_manual_mode = False  # True when the built-in Manual Recording rule is active
         self._transcript_edit_mode = False  # True when the transcript is user-editable
         self._transcript_modified = False  # True when transcript has unsaved edits
@@ -98,6 +99,9 @@ class TranscriptRecorderApp(QMainWindow):
         self._setup_menubar()
         self._setup_tray()
         self._load_config()
+        if self._closing:
+            return
+
         self._update_button_states()  # Set initial disabled state before permission check
         self._check_permissions()
         
@@ -982,6 +986,7 @@ class TranscriptRecorderApp(QMainWindow):
                         "Could not find the bundled configuration file.\n"
                         "Please reinstall the application."
                     )
+                    self._closing = True
                     QTimer.singleShot(0, self.close)
                     return
                 
@@ -998,11 +1003,7 @@ class TranscriptRecorderApp(QMainWindow):
             if not export_dir:
                 export_dir = self._prompt_for_export_directory()
                 if not export_dir:
-                    QMessageBox.critical(
-                        self, "Export Directory Required",
-                        "An export directory is required to run the application.\n\n"
-                        "The application will now close."
-                    )
+                    self._closing = True
                     QTimer.singleShot(0, self.close)
                     return
 
@@ -1264,15 +1265,9 @@ class TranscriptRecorderApp(QMainWindow):
         try:
             if not AXIsProcessTrusted():
                 self._has_accessibility = False
-                QMessageBox.warning(
-                    self, "Accessibility Permission Required",
-                    "This application requires accessibility permissions to read "
-                    "meeting transcripts.\n\n"
-                    "Please grant access in:\n"
-                    "System Settings → Privacy & Security → Accessibility\n\n"
-                    "You may need to restart the application after granting permission."
-                )
-                self.statusBar().showMessage("⚠️ Accessibility permission required")
+                dlg = PermissionsDialog(self, is_dark=self._is_dark_mode())
+                dlg.exec()
+                self._set_status("Accessibility permission required", "warn")
             else:
                 self._has_accessibility = True
                 logger.info("Permissions: accessibility access granted")
@@ -3244,23 +3239,16 @@ class TranscriptRecorderApp(QMainWindow):
             )
     
     def _prompt_for_export_directory(self) -> Optional[str]:
-        """Show a file dialog to pick an export directory and persist it to config.
+        """Show the welcome dialog to pick an export directory and persist it to config.
 
         Called when export_directory is blank (first launch or after reset).
         Returns the chosen directory path string, or None if the user cancelled.
         """
-        QMessageBox.information(
-            self, "Export Directory Required",
-            "Please choose a folder where recordings, transcripts,\n"
-            "and tool data will be saved."
-        )
+        dlg = WelcomeDialog(self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return None
 
-        chosen_dir = QFileDialog.getExistingDirectory(
-            self,
-            "Choose Export Directory",
-            str(DEFAULT_EXPORT_DIR),
-            QFileDialog.Option.ShowDirsOnly
-        )
+        chosen_dir = dlg.chosen_directory
         if not chosen_dir:
             return None
 
@@ -3738,6 +3726,8 @@ def main():
     
     # Create and show main window
     window = TranscriptRecorderApp()
+    if window._closing:
+        sys.exit(0)
     window.show()
     
     exit_code = app.exec()

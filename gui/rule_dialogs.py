@@ -52,7 +52,7 @@ class RuleImportDialog(QMainWindow):
         url_layout.addWidget(self.url_field, stretch=1)
 
         self.fetch_btn = QPushButton("Fetch")
-        self.fetch_btn.setProperty("class", "primary")
+        self.fetch_btn.setProperty("class", "action")
         self.fetch_btn.clicked.connect(self._on_fetch)
         url_layout.addWidget(self.fetch_btn)
 
@@ -77,6 +77,7 @@ class RuleImportDialog(QMainWindow):
         layout.addWidget(self.rule_table, stretch=1)
 
         self.status_label = QLabel("")
+        self.status_label.setObjectName("dialog_status")
         layout.addWidget(self.status_label)
 
         btn_layout = QHBoxLayout()
@@ -93,7 +94,7 @@ class RuleImportDialog(QMainWindow):
         btn_layout.addStretch()
 
         self.install_btn = QPushButton("Install Selected")
-        self.install_btn.setProperty("class", "success")
+        self.install_btn.setProperty("class", "primary")
         self.install_btn.setEnabled(False)
         self.install_btn.clicked.connect(self._on_install)
         btn_layout.addWidget(self.install_btn)
@@ -104,18 +105,24 @@ class RuleImportDialog(QMainWindow):
 
         layout.addLayout(btn_layout)
 
+    # -- Status helper --
+    def _set_status(self, text: str, state: str = ""):
+        """Set status label text with themed state (info, success, warn, error, or empty)."""
+        self.status_label.setText(text)
+        self.status_label.setProperty("status_state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
     # -- Fetch --
     def _on_fetch(self):
         url = self.url_field.text().strip()
         if not url:
-            self.status_label.setText("Please enter a URL.")
-            self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+            self._set_status("Please enter a URL.", "warn")
             return
 
         self.fetch_btn.setEnabled(False)
         self.install_btn.setEnabled(False)
-        self.status_label.setText("Fetching rule list...")
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status("Fetching rule list...", "info")
         QApplication.processEvents()
 
         self._worker = RuleFetchWorker(url)
@@ -150,8 +157,10 @@ class RuleImportDialog(QMainWindow):
             self.rule_table.setItem(row_idx, 2, status_item)
 
         count = len(rules)
-        self.status_label.setText(f"Found {count} rule(s)." if count else "No rules found in this repository.")
-        self.status_label.setStyleSheet("color: #34C759; font-size: 12px;" if count else "color: #FF9500; font-size: 12px;")
+        if count:
+            self._set_status(f"Found {count} rule(s).", "success")
+        else:
+            self._set_status("No rules found in this repository.", "warn")
         self.fetch_btn.setEnabled(True)
         self.install_btn.setEnabled(count > 0)
 
@@ -169,8 +178,7 @@ class RuleImportDialog(QMainWindow):
         return "Installed"
 
     def _on_fetch_error(self, message: str):
-        self.status_label.setText(f"Fetch failed: {message}")
-        self.status_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+        self._set_status(f"Fetch failed: {message}", "error")
         self.fetch_btn.setEnabled(True)
         logger.error(f"Rule import: fetch error: {message}")
 
@@ -205,14 +213,12 @@ class RuleImportDialog(QMainWindow):
     def _on_install(self):
         selected = self._get_selected_rules()
         if not selected:
-            self.status_label.setText("No rules selected.")
-            self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+            self._set_status("No rules selected.", "warn")
             return
 
         self.install_btn.setEnabled(False)
         self.fetch_btn.setEnabled(False)
-        self.status_label.setText("Installing...")
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status("Installing...", "info")
         QApplication.processEvents()
 
         self._worker = RuleFetchWorker(self.url_field.text().strip())
@@ -221,8 +227,7 @@ class RuleImportDialog(QMainWindow):
         self._worker.start_download(selected, self._local_rules_dir)
 
     def _on_download_progress(self, message: str):
-        self.status_label.setText(message)
-        self.status_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+        self._set_status(message, "info")
         QApplication.processEvents()
 
     def _on_download_finished(self, installed: list, errors: list):
@@ -265,12 +270,10 @@ class RuleImportDialog(QMainWindow):
             QMessageBox.information(self, "Rules Installed", msg)
             self.rules_imported.emit()
 
-            self.status_label.setText(f"Installed {len(installed)} rule(s)")
-            self.status_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            self._set_status(f"Installed {len(installed)} rule(s)", "success")
             logger.info(f"Rule import: installed {installed}")
         else:
-            self.status_label.setText("No rules were installed.")
-            self.status_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+            self._set_status("No rules were installed.", "warn")
 
     def _refresh_status_column(self):
         for row in range(self.rule_table.rowCount()):
