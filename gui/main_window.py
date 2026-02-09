@@ -655,8 +655,15 @@ class TranscriptRecorderApp(QMainWindow):
         self.statusBar().showMessage = self._show_status_message
     
     def _show_status_message(self, text: str, timeout: int = 0):
-        """Set status bar text via the custom label (keeps compact button visible)."""
+        """Set status bar text via the custom label (keeps compact button visible).
+        
+        Also resets the ``status_state`` property to neutral so that a
+        previous warn/error tint does not bleed into the next message.
+        """
         self._status_msg_label.setText(text)
+        self._status_msg_label.setProperty("status_state", "")
+        self._status_msg_label.style().unpolish(self._status_msg_label)
+        self._status_msg_label.style().polish(self._status_msg_label)
     
     def _is_dark_mode(self) -> bool:
         """Determine if dark mode should be used based on theme setting."""
