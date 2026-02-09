@@ -9,11 +9,11 @@ After making code changes in a conversation, create a draft commit message file 
 
 ## File Location & Naming
 
-- **Folder:** `conversation_commit_messages/`
-- **Filename:** `<conversation-topic>_<YYYY-MM-DD_HHMM>.sh`
+- **Folder:** `conversation_commit_messages/<YYYY>/<MM>/<DD>/`
+  - Create the date subdirectories if they don't exist.
+- **Filename:** `<conversation-topic>.sh`
   - Use a short, lowercase, hyphen-separated summary of the conversation topic (e.g. `add-dark-mode`, `fix-capture-bug`, `rename-rules-to-sources`)
-  - Append a timestamp in `YYYY-MM-DD_HHMM` format
-  - Example: `conversation_commit_messages/rename-rules-to-sources_2026-02-09_1430.sh`
+  - Example: `conversation_commit_messages/2026/02/09/rename-rules-to-sources.sh`
 - **Make executable:** After creating the file, run `chmod +x` on it so the user can execute it directly.
 
 ## File Contents
@@ -59,3 +59,4 @@ git add <file1> <file2> ... \
 3. **Only generate when changes were made** — skip this if the conversation was purely informational with no file edits.
 4. **Include all changes** — the commit message should cover everything modified in the conversation, not just the last edit.
 5. **Respect `.gitignore`** — Before building the `git add` list, read the project's `.gitignore` file. Exclude any files or directories that match gitignore patterns. The commit script itself (`conversation_commit_messages/`) is gitignored and must never appear in the `git add` command. Only include tracked, non-ignored files.
+6. **Only stage specific files** — NEVER use `git add -A`, `git add .`, or any other broad staging command. Always list each file explicitly in the `git add` so that only changes from this conversation are staged. Other conversations may have made changes to other files concurrently.
