@@ -312,6 +312,8 @@ All icons are Lucide SVGs stored in the `_SVG_SOURCES` dictionary in `gui/icons.
 | `save` | Floppy disk | Save meeting details |
 | `folder_open` | Open folder | Open meeting folder |
 | `refresh` | Circular arrows | Reload transcript |
+| `search` | Magnifying glass | Accessibility Inspector filter fields |
+| `scan_eye` | Scanning eye in viewfinder | Accessibility Inspector window |
 
 ### 7.2 Tint System
 

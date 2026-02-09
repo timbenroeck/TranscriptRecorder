@@ -245,6 +245,25 @@ _SVG_SOURCES: dict[str, str] = {
         '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
         '<path d="M12 17h.01"/></svg>'
     ),
+    "search": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="11" cy="11" r="8"/>'
+        '<path d="m21 21-4.3-4.3"/></svg>'
+    ),
+    "scan_eye": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M3 7V5a2 2 0 0 1 2-2h2"/>'
+        '<path d="M17 3h2a2 2 0 0 1 2 2v2"/>'
+        '<path d="M21 17v2a2 2 0 0 1-2 2h-2"/>'
+        '<path d="M7 21H5a2 2 0 0 1-2-2v-2"/>'
+        '<circle cx="12" cy="12" r="1"/>'
+        '<path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 '
+        '7.5 7.5 0 0 0 13.888 0"/></svg>'
+    ),
 }
 
 

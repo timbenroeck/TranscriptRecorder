@@ -862,6 +862,10 @@ class TranscriptRecorderApp(QMainWindow):
         edit_rule_action.triggered.connect(self._show_rule_editor)
         rules_menu.addAction(edit_rule_action)
         
+        ax_inspector_action = QAction("Accessibility Inspector", self)
+        ax_inspector_action.triggered.connect(self._show_ax_inspector)
+        rules_menu.addAction(ax_inspector_action)
+        
         rules_menu.addSeparator()
         
         set_default_rule_action = QAction("Set Current as Default", self)
@@ -3167,6 +3171,12 @@ class TranscriptRecorderApp(QMainWindow):
         self._rule_editor = RuleEditorDialog(rule_json_path, self)
         self._rule_editor.rule_saved.connect(self._scan_rules)
         self._rule_editor.show()
+
+    def _show_ax_inspector(self):
+        """Open the Accessibility Inspector window."""
+        from gui.ax_inspector import AccessibilityInspectorDialog
+        self._ax_inspector = AccessibilityInspectorDialog(self)
+        self._ax_inspector.show()
 
     def _open_rules_folder(self):
         """Open the rules directory in Finder."""
