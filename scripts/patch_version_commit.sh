@@ -19,6 +19,12 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     exit 0
 fi
 
+# 1. Pull latest changes to avoid push rejection
+echo ""
+echo "Pulling latest changes from origin..."
+git pull --rebase origin main
+
+# 2. Bump version
 python bump_version.py patch   # or minor/major
 
 # 3. Commit the version bump
@@ -26,7 +32,8 @@ git add version.py
 git commit -m "Bump version to $(python -c 'from version import __version__; print(__version__)')"
 
 # 4. Create a version tag
-git tag -a "v$(python -c 'from version import __version__; print(__version__)')" -m "Release v$(python -c 'from version import __version__; print(__version__)')"
+VERSION=$(python -c 'from version import __version__; print(__version__)')
+git tag -a "v${VERSION}" -m "Release v${VERSION}"
 
 # 5. Push changes and tag
 git push origin main
