@@ -1,0 +1,28 @@
+---
+description: Enforce style guide compliance for all UI and visual changes
+globs: gui/**/*.py
+alwaysApply: false
+---
+
+# UI Style Guide Compliance
+
+Before making ANY visual or UI changes, you MUST read and reference the style guide:
+
+  `docs/STYLE_GUIDE.md`
+
+## Requirements
+
+1. **Read first** — Read `docs/STYLE_GUIDE.md` before writing or modifying any GUI code.
+2. **Follow the palette** — Use only colours defined in the style guide (Section 1). Never introduce ad-hoc hex values.
+3. **Use existing button classes** — Apply the correct `class` property from Section 2. If a new class is needed, follow the "Adding a new button class" procedure in Section 12.
+4. **Match the icon system** — Use `IconManager` and the tint system from Section 8. Add new icons following Section 8.5.
+5. **Respect status bar states** — Use `_set_status(text, state)` with documented states (Section 7).
+6. **Update the style guide** — If your change adds or modifies any visual element (colour, button class, icon, status state), update `docs/STYLE_GUIDE.md` to reflect the change before finishing.
+
+## Source Files
+
+| File | Role |
+|------|------|
+| `gui/styles.py` | QSS palette variables and widget rules |
+| `gui/icons.py` | SVG icon registry, tint map, IconManager |
+| `gui/main_window.py` | Widget construction, class assignments, signals |

@@ -1,0 +1,61 @@
+---
+description: Generate a draft commit message file after making code changes
+alwaysApply: true
+---
+
+# Draft Commit Message Per Conversation
+
+After making code changes in a conversation, create a draft commit message file so changes can be easily committed later.
+
+## File Location & Naming
+
+- **Folder:** `conversation_commit_messages/`
+- **Filename:** `<conversation-topic>_<YYYY-MM-DD_HHMM>.sh`
+  - Use a short, lowercase, hyphen-separated summary of the conversation topic (e.g. `add-dark-mode`, `fix-capture-bug`, `rename-rules-to-sources`)
+  - Append a timestamp in `YYYY-MM-DD_HHMM` format
+  - Example: `conversation_commit_messages/rename-rules-to-sources_2026-02-09_1430.sh`
+- **Make executable:** After creating the file, run `chmod +x` on it so the user can execute it directly.
+
+## File Contents
+
+The file should be a valid shell script the user can review and then run.
+
+### Format
+
+```bash
+#!/bin/bash
+# Commit message for: <conversation topic>
+# Generated: <YYYY-MM-DD HH:MM>
+#
+# Files changed:
+#   <file1> (added/modified/renamed/deleted)
+#   <file2> (added/modified/renamed/deleted)
+#   ...
+
+git add <file1> <file2> ... \
+  && git commit -m "<type>(<scope>): <short summary>" -m "<bullet list of changes>"
+```
+
+1. **Shebang + comments** — Start with `#!/bin/bash`, then comment lines listing the conversation topic, timestamp, and every file changed with its status.
+2. **`git add`** — Stage every file that was added, modified, renamed, or deleted in the conversation.
+3. **`&& git commit`** — Chained with a conventional-commit subject line and a bullet-point body via a second `-m` flag.
+
+### Conventional Commit Types
+
+| Type | When to use |
+|------|-------------|
+| `feat` | New feature or capability |
+| `fix` | Bug fix |
+| `refactor` | Code restructuring without behavior change |
+| `docs` | Documentation only |
+| `style` | UI/visual changes, formatting |
+| `chore` | Maintenance, config, dependencies |
+| `rename` | File or symbol renaming |
+
+## Rules
+
+1. **Create or update the file** whenever code changes are made during the conversation.
+2. **One file per conversation** — update the same file if more changes happen later in the conversation.
+3. **Only generate when changes were made** — skip this if the conversation was purely informational with no file edits.
+4. **Include all changes** — the commit message should cover everything modified in the conversation, not just the last edit.
+5. **Respect `.gitignore`** — Before building the `git add` list, read the project's `.gitignore` file. Exclude any files or directories that match gitignore patterns. The commit script itself (`conversation_commit_messages/`) is gitignored and must never appear in the `git add` command. Only include tracked, non-ignored files.

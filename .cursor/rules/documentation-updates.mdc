@@ -1,0 +1,26 @@
+---
+description: Ensure documentation is reviewed and updated when code changes affect it
+alwaysApply: true
+---
+
+# Documentation Must Stay In Sync
+
+After completing code changes, review all project documentation and update any files impacted by the changes.
+
+## How to Find Documentation
+
+Do NOT rely on a hardcoded list. Instead:
+
+1. **Scan `docs/`** — List all `*.md` files in the `docs/` directory to discover current documentation.
+2. **Check `README.md`** — The project root `README.md` is always a documentation file.
+3. **Check subdirectories** — Tools and other subdirectories may have their own `README.md` files (e.g. `tools/*/README.md`).
+
+Read the contents of each discovered doc file to understand what it covers before deciding whether it needs an update.
+
+## Rules
+
+1. **Scan and review after every change** — Before finishing, discover all documentation files as described above, read them, and determine if any content is now outdated or incomplete due to your changes.
+2. **Update what's affected** — If a change adds, removes, or modifies a feature, configuration, tool, UI element, or workflow, update the corresponding documentation to match.
+3. **README is mandatory** — The project root `README.md` must always reflect the current state of the application. If features, setup steps, or usage instructions changed, update it.
+4. **Don't update what's unaffected** — Only touch documentation that is actually impacted. Don't make cosmetic edits to unrelated sections.
+5. **Note new additions** — If you create a new tool, source, or major feature, add a section or entry in the relevant doc file.
