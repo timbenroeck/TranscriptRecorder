@@ -76,6 +76,14 @@ exports/
 *.temp
 .cache/
 
+# Code signing artifacts
+*.p12
+*.cer
+*.certSigningRequest
+certificate_base64.txt
+build.keychain
+build.keychain-db
+
 # Coverage reports
 htmlcov/
 .tox/

@@ -24,7 +24,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools
           pip install -r requirements.txt
           pip install py2app
       
@@ -33,14 +33,118 @@ jobs:
         run: |
           VERSION=$(python -c "from version import __version__; print(__version__)")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-      
+
+      # =============================================================
+      # CODE SIGNING: Import certificate into a temporary keychain
+      # =============================================================
+      - name: Import Code Signing Certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          # Decode the certificate from base64
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+
+          # Create a temporary keychain
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+
+          # Set keychain timeout to 20 minutes (enough for the build)
+          security set-keychain-settings -t 1200 -u build.keychain
+
+          # Import the certificate into the keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign
+
+          # Allow codesign to access the keychain without UI prompt
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" build.keychain
+
+          # Add the keychain to the search list
+          security list-keychains -d user -s build.keychain login.keychain
+
+          # Clean up the certificate file
+          rm certificate.p12
+
+          # Verify the identity is available
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning build.keychain
+
       - name: Build application
         run: |
           python setup_py2app.py py2app
-      
+
+      # =============================================================
+      # CODE SIGNING: Sign the .app bundle
+      # =============================================================
+      - name: Sign Application
+        run: |
+          APP_PATH="dist/Transcript Recorder.app"
+          ENTITLEMENTS="entitlements.plist"
+
+          # Resolve the full signing identity from the keychain
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Signing with identity: $SIGNING_IDENTITY"
+
+          if [ -z "$SIGNING_IDENTITY" ]; then
+            echo "ERROR: No Developer ID Application identity found in keychain"
+            security find-identity -v -p codesigning build.keychain
+            exit 1
+          fi
+
+          # Sign all .so files (Python extensions)
+          echo "Signing .so files..."
+          find "$APP_PATH" -name "*.so" -exec \
+              codesign --force --options runtime --timestamp \
+              --entitlements "$ENTITLEMENTS" \
+              --sign "$SIGNING_IDENTITY" {} \;
+
+          # Sign all .dylib files
+          echo "Signing .dylib files..."
+          find "$APP_PATH" -name "*.dylib" -exec \
+              codesign --force --options runtime --timestamp \
+              --entitlements "$ENTITLEMENTS" \
+              --sign "$SIGNING_IDENTITY" {} \;
+
+          # Sign all embedded frameworks
+          echo "Signing frameworks..."
+          if [ -d "$APP_PATH/Contents/Frameworks" ]; then
+              for framework in "$APP_PATH"/Contents/Frameworks/*.framework; do
+                  if [ -d "$framework" ]; then
+                      codesign --force --options runtime --timestamp \
+                          --entitlements "$ENTITLEMENTS" \
+                          --sign "$SIGNING_IDENTITY" "$framework"
+                  fi
+              done
+          fi
+
+          # Sign all executables in MacOS/
+          echo "Signing executables in Contents/MacOS/..."
+          for exec_file in "$APP_PATH"/Contents/MacOS/*; do
+              if [ -f "$exec_file" ]; then
+                  echo "  Signing $(basename "$exec_file")..."
+                  codesign --force --options runtime --timestamp \
+                      --entitlements "$ENTITLEMENTS" \
+                      --sign "$SIGNING_IDENTITY" "$exec_file"
+              fi
+          done
+
+          # Sign the entire .app bundle
+          echo "Signing .app bundle..."
+          codesign --force --options runtime --timestamp \
+              --entitlements "$ENTITLEMENTS" \
+              --sign "$SIGNING_IDENTITY" "$APP_PATH"
+
+          # Verify
+          echo "Verifying signature..."
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
       - name: Create DMG
         run: |
-          # Create a DMG from the app bundle
           APP_NAME="Transcript Recorder"
           DMG_NAME="TranscriptRecorder-${{ steps.version.outputs.version }}.dmg"
           
@@ -59,14 +163,34 @@ jobs:
           
           # Clean up
           rm -rf dmg_contents
-      
+
+      # =============================================================
+      # CODE SIGNING: Sign the DMG
+      # =============================================================
+      - name: Sign DMG
+        run: |
+          DMG_PATH="dist/TranscriptRecorder-${{ steps.version.outputs.version }}.dmg"
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+          codesign --force --timestamp \
+              --sign "$SIGNING_IDENTITY" "$DMG_PATH"
+
+          codesign --verify --verbose=2 "$DMG_PATH"
+
+      # =============================================================
+      # CLEANUP: Remove the temporary keychain
+      # =============================================================
+      - name: Clean Up Keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain 2>/dev/null || true
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: TranscriptRecorder-${{ steps.version.outputs.version }}
           path: |
             dist/*.dmg
-            dist/*.app
       
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
