@@ -3,7 +3,7 @@
   "command_paths": [
     "/Applications/zoom.us.app/Contents/MacOS/zoom.us"
   ],
-  "rules_to_find_transcript_table": [
+  "transcript_search_paths": [
     {
       "path_name": "Transcript Window Path",
       "steps": [

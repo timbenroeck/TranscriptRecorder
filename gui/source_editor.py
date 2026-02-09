@@ -1,8 +1,8 @@
 """
-Form-based rule editor for rule.json files.
+Form-based source editor for source.json files.
 
 Provides a user-friendly GUI so users never need to edit raw JSON.
-Each section of the rule definition has dedicated widgets.
+Each section of the source definition has dedicated widgets.
 """
 import json
 from pathlib import Path
@@ -445,20 +445,20 @@ class _PathEditor(QGroupBox):
         }
 
 
-class RuleEditorDialog(QMainWindow):
-    """Form-based editor for rule.json files.
+class SourceEditorDialog(QMainWindow):
+    """Form-based editor for source.json files.
 
     Provides tabs for General Settings, Serialization Settings, and
-    Search Rules (the transcript-finding path/step builder).
+    Transcript Search Paths (the transcript-finding path/step builder).
     """
 
-    rule_saved = pyqtSignal()
+    source_saved = pyqtSignal()
 
-    def __init__(self, rule_json_path: Path, parent=None):
+    def __init__(self, source_json_path: Path, parent=None):
         super().__init__(parent)
-        self._rule_json_path = rule_json_path
+        self._source_json_path = source_json_path
         self._is_modified = False
-        self.setWindowTitle(f"Rule Editor — {rule_json_path.parent.name}")
+        self.setWindowTitle(f"Source Editor — {source_json_path.parent.name}")
         self.setMinimumSize(700, 600)
         self.resize(780, 680)
 
@@ -468,7 +468,7 @@ class RuleEditorDialog(QMainWindow):
         main_layout.setContentsMargins(12, 12, 12, 12)
 
         # Info label
-        info = QLabel(f"Editing: {rule_json_path}")
+        info = QLabel(f"Editing: {source_json_path}")
         info.setObjectName("secondary_label")
         info.setWordWrap(True)
         main_layout.addWidget(info)
@@ -544,7 +544,7 @@ class RuleEditorDialog(QMainWindow):
         serial_scroll.setWidget(serial_widget)
         self.tabs.addTab(serial_scroll, "Serialization")
 
-        # --- Tab 3: Search Rules ---
+        # --- Tab 3: Transcript Search Paths ---
         search_scroll = QScrollArea()
         search_scroll.setWidgetResizable(True)
         search_widget = QWidget()
@@ -585,7 +585,7 @@ class RuleEditorDialog(QMainWindow):
         self._search_layout.addStretch()
 
         search_scroll.setWidget(search_widget)
-        self.tabs.addTab(search_scroll, "Search Rules")
+        self.tabs.addTab(search_scroll, "Transcript Search Paths")
 
         # --- Status + Buttons ---
         self.status_label = QLabel("")
@@ -627,13 +627,13 @@ class RuleEditorDialog(QMainWindow):
         self.status_label.setText("")
 
     def _load(self):
-        """Load rule.json into the form."""
+        """Load source.json into the form."""
         try:
-            if not self._rule_json_path.exists():
-                self._set_status("Rule file not found.", "warn")
+            if not self._source_json_path.exists():
+                self._set_status("Source file not found.", "warn")
                 return
 
-            with open(self._rule_json_path, 'r', encoding='utf-8') as f:
+            with open(self._source_json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
             # General tab
@@ -655,13 +655,13 @@ class RuleEditorDialog(QMainWindow):
             self.save_json_cb.setChecked(data.get("serialization_save_json", False))
             self.text_roles_editor.set_roles(data.get("serialization_text_element_roles", {}))
 
-            # Search rules tab — clear existing and rebuild
+            # Transcript search paths tab — clear existing and rebuild
             for editor in self._path_editors:
                 self._paths_container.removeWidget(editor)
                 editor.deleteLater()
             self._path_editors.clear()
 
-            for i, path_data in enumerate(data.get("rules_to_find_transcript_table", [])):
+            for i, path_data in enumerate(data.get("transcript_search_paths", [])):
                 self._add_path_widget(path_data, i)
 
             self._is_modified = False
@@ -670,8 +670,8 @@ class RuleEditorDialog(QMainWindow):
         except json.JSONDecodeError as e:
             self._set_status(f"Invalid JSON: {e}", "error")
         except Exception as e:
-            self._set_status(f"Error loading rule: {e}", "error")
-            logger.error(f"RuleEditor: failed to load {self._rule_json_path}: {e}")
+            self._set_status(f"Error loading source: {e}", "error")
+            logger.error(f"SourceEditor: failed to load {self._source_json_path}: {e}")
 
     def _reload(self):
         if self._is_modified:
@@ -684,7 +684,7 @@ class RuleEditorDialog(QMainWindow):
         self._set_status("Reloaded from disk.", "info")
 
     def _save(self):
-        """Build the rule dict from form widgets and write to rule.json."""
+        """Build the source dict from form widgets and write to source.json."""
         data = {}
 
         # General
@@ -709,22 +709,22 @@ class RuleEditorDialog(QMainWindow):
         data["serialization_save_json"] = self.save_json_cb.isChecked()
         data["serialization_text_element_roles"] = self.text_roles_editor.get_roles()
 
-        # Search rules
+        # Transcript search paths
         paths = [editor.to_dict() for editor in self._path_editors]
-        data["rules_to_find_transcript_table"] = paths
+        data["transcript_search_paths"] = paths
 
         try:
             formatted = json.dumps(data, indent=2)
-            with open(self._rule_json_path, 'w', encoding='utf-8') as f:
+            with open(self._source_json_path, 'w', encoding='utf-8') as f:
                 f.write(formatted)
 
             self._is_modified = False
             self._set_status("✓ Saved", "success")
-            logger.info(f"RuleEditor: saved {self._rule_json_path}")
-            self.rule_saved.emit()
+            logger.info(f"SourceEditor: saved {self._source_json_path}")
+            self.source_saved.emit()
 
         except Exception as e:
-            ThemedMessageDialog.critical(self, "Save Error", f"Failed to save rule: {e}")
+            ThemedMessageDialog.critical(self, "Save Error", f"Failed to save source: {e}")
 
     # -- Path management --
     def _add_path(self):

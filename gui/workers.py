@@ -615,13 +615,13 @@ class ToolFetchWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Rule Import / Management
+# Source Import / Management
 # ---------------------------------------------------------------------------
 
-class RuleFetchWorker(QThread):
-    """Background worker to list and download rules from a GitHub repo's rules/ directory.
+class SourceFetchWorker(QThread):
+    """Background worker to list and download sources from a GitHub repo's sources/ directory.
 
-    Mirrors ``ToolFetchWorker`` but targets rules (``rule.json`` + ``rule.json.sha256``).
+    Mirrors ``ToolFetchWorker`` but targets sources (``source.json`` + ``source.json.sha256``).
     """
 
     listing_ready = pyqtSignal(list)        # [{name, url, ...}, ...]
@@ -632,13 +632,13 @@ class RuleFetchWorker(QThread):
     def __init__(self, api_url: str, parent=None):
         super().__init__(parent)
         self.api_url = api_url
-        self._rules_to_download: List[dict] = []
-        self._local_rules_dir: Optional[Path] = None
+        self._sources_to_download: List[dict] = []
+        self._local_sources_dir: Optional[Path] = None
         self._mode = "list"
 
-    def start_download(self, rules: List[dict], local_rules_dir: Path):
-        self._rules_to_download = rules
-        self._local_rules_dir = local_rules_dir
+    def start_download(self, sources: List[dict], local_sources_dir: Path):
+        self._sources_to_download = sources
+        self._local_sources_dir = local_sources_dir
         self._mode = "download"
         self.start()
 
@@ -664,7 +664,7 @@ class RuleFetchWorker(QThread):
                 self.error.emit("Unexpected response from GitHub API (expected a list).")
                 return
 
-            rule_dirs = [
+            source_dirs = [
                 {
                     "name": item["name"],
                     "url": item["url"],
@@ -673,7 +673,7 @@ class RuleFetchWorker(QThread):
                 for item in data
                 if item.get("type") == "dir"
             ]
-            self.listing_ready.emit(rule_dirs)
+            self.listing_ready.emit(source_dirs)
 
         except urllib.error.HTTPError as e:
             self.error.emit(f"HTTP {e.code}: {e.reason}\n\nURL: {self.api_url}")
@@ -686,24 +686,24 @@ class RuleFetchWorker(QThread):
         installed: List[str] = []
         errors: List[str] = []
 
-        for rule in self._rules_to_download:
-            name = rule["name"]
+        for source in self._sources_to_download:
+            name = source["name"]
             self.download_progress.emit(f"Downloading {name}...")
             try:
-                self._download_rule(rule)
+                self._download_source(source)
                 installed.append(name)
             except Exception as e:
-                logger.error(f"Rule import: failed to download {name}: {e}", exc_info=True)
+                logger.error(f"Source import: failed to download {name}: {e}", exc_info=True)
                 errors.append(f"{name}: {e}")
 
         self.download_finished.emit(installed, errors)
 
-    def _download_rule(self, rule: dict):
-        """Download all files for a single rule directory."""
+    def _download_source(self, source: dict):
+        """Download all files for a single source directory."""
         from gui.versioning import backup_json_file
 
-        name = rule["name"]
-        contents_url = rule["url"]
+        name = source["name"]
+        contents_url = source["url"]
 
         req = urllib.request.Request(
             contents_url,
@@ -718,13 +718,13 @@ class RuleFetchWorker(QThread):
         if not isinstance(files, list):
             raise ValueError(f"Unexpected response listing files for {name}")
 
-        local_dir = self._local_rules_dir / name
+        local_dir = self._local_sources_dir / name
         local_dir.mkdir(parents=True, exist_ok=True)
 
-        # Backup existing rule.json before overwriting
-        local_rule_json = local_dir / "rule.json"
-        if local_rule_json.exists():
-            backup_json_file(local_rule_json)
+        # Backup existing source.json before overwriting
+        local_source_json = local_dir / "source.json"
+        if local_source_json.exists():
+            backup_json_file(local_source_json)
 
         for item in files:
             if item.get("type") != "file":

@@ -9,7 +9,7 @@ A macOS application that captures meeting transcripts and live captions using th
 - **Smart Merging**: Intelligently merges transcript snapshots to avoid duplicates
 - **Native macOS UI**: Modern PyQt6 interface with light/dark mode support
 - **Meeting Tools**: Run custom scripts (cleanup, summarization, etc.) against your recordings
-- **Rules & Tools**: Extensible rule-based architecture — download or create your own
+- **Sources & Tools**: Extensible source-based architecture — download or create your own
 - **Meeting Details**: Add meeting name, notes, and timestamps to your recordings
 - **Screen Sharing Privacy**: Hide the app window from screen sharing and recordings
 - **Auto-Updates**: Check for and install updates directly from the app
@@ -68,8 +68,8 @@ Transcript Recorder uses the macOS Accessibility API to read transcript content 
 
 On first launch, the application:
 
-1. **Prompts for an export directory** — where recordings, rules, and tools will be stored
-2. **Copies bundled rules and tools** into the export directory (Zoom, Microsoft Teams, Clean Transcript)
+1. **Prompts for an export directory** — where recordings, sources, and tools will be stored
+2. **Copies bundled sources and tools** into the export directory (Zoom, Microsoft Teams, Clean Transcript)
 3. **Selects Manual Recording** by default so the app is immediately usable
 
 No downloads, accessibility permissions, or additional configuration are required to start using the app in manual mode.
@@ -119,29 +119,31 @@ recordings/
             └── .snapshots/                 # Individual capture snapshots
 ```
 
-## Rules
+## Sources
 
-Rules define how the app finds and reads transcript content from a specific meeting application. Each rule is a folder containing a `rule.json` file stored in the `rules/` directory inside your export folder.
+Sources define how the app finds and reads transcript content from a specific meeting application. Each source is a folder containing a `source.json` file stored in the `sources/` directory inside your export folder.
 
-### Bundled Rules
+> **Full documentation:** See [docs/SOURCES.md](docs/SOURCES.md) for the complete developer guide, including the full `source.json` schema, search path reference, contribution guide, and troubleshooting.
 
-The app ships with rules for **Zoom** and **Microsoft Teams**. These are automatically installed on first launch. Additional rules (Slack, WebEx, etc.) can be downloaded from the Rules menu.
+### Bundled Sources
 
-### Rule Structure
+The app ships with sources for **Zoom** and **Microsoft Teams**. These are automatically installed on first launch. Additional sources (Slack, WebEx, etc.) can be downloaded from the Sources menu.
+
+### Source Structure
 
 ```
-rules/
+sources/
 └── zoom/
-    └── rule.json
+    └── source.json
 ```
 
-A `rule.json` defines:
+A `source.json` defines:
 
 | Field | Description |
 |-------|-------------|
 | `display_name` | Name shown in the application dropdown |
 | `command_paths` | Paths to detect if the application is running |
-| `rules_to_find_transcript_table` | Search paths to locate the transcript UI element |
+| `transcript_search_paths` | Search paths to locate the transcript UI element |
 | `traversal_mode` | `bfs` (breadth-first) or `dfs` (depth-first) search |
 | `traversal_roles_to_skip` | Accessibility roles to skip during traversal |
 | `serialization_text_element_roles` | Map of roles to attributes for text extraction |
@@ -150,25 +152,25 @@ A `rule.json` defines:
 | `exclude_pattern` | Regex pattern to filter out unwanted text |
 | `incremental_export` | When true, only exports new rows since the last capture |
 
-### Managing Rules
+### Managing Sources
 
-- **Rules → Import Rules...** — Download rules from the GitHub repository
-- **Rules → Edit Rule...** — Open the visual Rule Editor for any installed rule
-- **Rules → Set Current as Default** — Set the selected rule as the startup default
-- **Rules → Open Rules Folder** — Open the rules directory in Finder
-- **Rules → Refresh Rules** — Rescan the rules directory
+- **Sources → Import Sources...** — Download sources from the GitHub repository
+- **Sources → Edit Source...** — Open the visual Source Editor for any installed source
+- **Sources → Set Current as Default** — Set the selected source as the startup default
+- **Sources → Open Sources Folder** — Open the sources directory in Finder
+- **Sources → Refresh Sources** — Rescan the sources directory
 
-### Adding a New Rule
+### Adding a New Source
 
 To add support for a new meeting application:
 
-1. Create a new folder in your rules directory (e.g. `rules/my_app/`)
-2. Add a `rule.json` — use an existing rule as a template
+1. Create a new folder in your sources directory (e.g. `sources/my_app/`)
+2. Add a `source.json` — use an existing source as a template
 3. Use macOS **Accessibility Inspector** to identify the UI element roles and attributes for the transcript
 4. Define search paths and steps to locate the transcript element
-5. **Rules → Refresh Rules** to pick up the new rule
+5. **Sources → Refresh Sources** to pick up the new source
 
-Alternatively, use **Rules → Import Rules...** to download a pre-built rule from the repository.
+Alternatively, use **Sources → Import Sources...** to download a pre-built source from the repository.
 
 ## Meeting Tools
 
@@ -246,7 +248,7 @@ Parameters with a `"builtin"` key are automatically resolved at run-time:
 | `meeting_transcript` | Full path to `meeting_transcript.txt` |
 | `meeting_details` | Full path to `meeting_details.txt` |
 | `export_directory` | Base export directory |
-| `app_name` | Key of the selected rule (e.g. `zoom`, `msteams`, `manual`) |
+| `app_name` | Key of the selected source (e.g. `zoom`, `msteams`, `manual`) |
 
 ### Managing Tools
 
@@ -275,7 +277,7 @@ The application configuration is stored at `~/Library/Application Support/Transc
   },
   "client_settings": {
     "export_directory": "",
-    "default_rule": ""
+    "default_source": ""
   }
 }
 ```
@@ -285,8 +287,8 @@ The application configuration is stored at `~/Library/Application Support/Transc
 | `logging.level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, or `NONE` |
 | `logging.log_to_file` | Write logs to a rotating file |
 | `logging.log_file_name` | Log filename inside the `.logs` directory |
-| `client_settings.export_directory` | Where recordings, rules, and tools are stored |
-| `client_settings.default_rule` | Rule key selected on startup (e.g. `zoom`, `manual`) |
+| `client_settings.export_directory` | Where recordings, sources, and tools are stored |
+| `client_settings.default_source` | Source key selected on startup (e.g. `zoom`, `manual`) |
 
 You can change the log level from **Maintenance → Log Level** without editing the file. Use **Maintenance → Change Export Directory...** to move your export location.
 
@@ -324,22 +326,22 @@ You can change the log level from **Maintenance → Log Level** without editing 
 | **Open Tools Folder** | Open the tools directory in Finder |
 | **Refresh Tools** | Rescan the tools directory for new or updated tools |
 
-### Rules
+### Sources
 
 | Menu Item | Description |
 |-----------|-------------|
-| **Import Rules...** | Download rules from the GitHub repository |
-| **Edit Rule...** | Open the visual Rule Editor for an installed rule |
-| **Set Current as Default** | Save the selected rule as the startup default |
-| **Clear Default** | Remove the default rule setting (falls back to Manual Recording) |
-| **Open Rules Folder** | Open the rules directory in Finder |
-| **Refresh Rules** | Rescan the rules directory for new or updated rules |
+| **Import Sources...** | Download sources from the GitHub repository |
+| **Edit Source...** | Open the visual Source Editor for an installed source |
+| **Set Current as Default** | Save the selected source as the startup default |
+| **Clear Default** | Remove the default source setting (falls back to Manual Recording) |
+| **Open Sources Folder** | Open the sources directory in Finder |
+| **Refresh Sources** | Rescan the sources directory for new or updated sources |
 
 ### Maintenance
 
 | Menu Item | Description |
 |-----------|-------------|
-| **Change Export Directory...** | Move the export location (recordings, rules, tools) |
+| **Change Export Directory...** | Move the export location (recordings, sources, tools) |
 | **Log Level** | Set the runtime log level; **Change Default...** persists it to config |
 | **Clear Log File** | Clears the application log file |
 | **Clear All Snapshots** | Removes `.snapshots` folders from past recordings while preserving merged transcripts |
@@ -354,8 +356,8 @@ You can change the log level from **Maintenance → Log Level** without editing 
 | **Manual Recording** | Built-in | Paste or type transcripts — no permissions needed |
 | **Zoom** | Bundled | Works with transcript window and in-meeting captions |
 | **Microsoft Teams** | Bundled | Works with Live Captions feature |
-| **WebEx** | Available | Download via Rules → Import Rules |
-| **Slack** | Available | Download via Rules → Import Rules |
+| **WebEx** | Available | Download via Sources → Import Sources |
+| **Slack** | Available | Download via Sources → Import Sources |
 
 ## Troubleshooting
 
@@ -368,7 +370,7 @@ See [Granting Accessibility Permissions](#granting-accessibility-permissions) ab
 3. Ensure the toggle is enabled
 4. Restart the application
 
-> This only applies to automated capture rules. Manual Recording does not require accessibility permissions.
+> This only applies to automated capture sources. Manual Recording does not require accessibility permissions.
 
 ### Transcript not capturing
 
@@ -380,9 +382,9 @@ See [Granting Accessibility Permissions](#granting-accessibility-permissions) ab
 ### Application not detected
 
 - Verify the meeting app is **running**
-- Check that the `command_paths` in the rule match your installation
+- Check that the `command_paths` in the source match your installation
 - Some apps (like Teams) may run from different paths depending on how they were installed
-- Use **Rules → Edit Rule...** to update the command paths
+- Use **Sources → Edit Source...** to update the command paths
 
 ### Tools not appearing
 
@@ -418,16 +420,16 @@ python gui_app.py
 
 ### Bundle Manifest
 
-The `bundle.json` file at the repo root controls which rules and tools are shipped inside the built `.app`:
+The `bundle.json` file at the repo root controls which sources and tools are shipped inside the built `.app`:
 
 ```json
 {
-  "rules": ["zoom", "msteams"],
+  "sources": ["zoom", "msteams"],
   "tools": ["clean_transcript"]
 }
 ```
 
-Only explicitly listed items are included in the app bundle. Other rules and tools in the repo (e.g. `slack`, `webex`, `summarize_meeting_coco`) remain available for download via the Import menus but are not shipped with the app.
+Only explicitly listed items are included in the app bundle. Other sources and tools in the repo (e.g. `slack`, `webex`, `summarize_meeting_coco`) remain available for download via the Import menus but are not shipped with the app.
 
 ## License
 

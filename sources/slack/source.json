@@ -3,7 +3,7 @@
   "command_paths": [
     "/Applications/Slack.app/Contents/MacOS/Slack"
   ],
-  "rules_to_find_transcript_table": [
+  "transcript_search_paths": [
     {
       "path_name": "Main Meeting Window Path",
       "steps": [

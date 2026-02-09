@@ -6,6 +6,6 @@
   },
   "client_settings": {
     "export_directory": "",
-    "default_rule": "manual"
+    "default_source": "manual"
   }
 }

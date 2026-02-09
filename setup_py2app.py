@@ -71,34 +71,34 @@ DATA_FILES = [
 ]
 
 # --- Bundle manifest ---
-# bundle.json at the repo root controls which rules and tools are shipped
+# bundle.json at the repo root controls which sources and tools are shipped
 # inside the .app.  Only explicitly listed items are included.
 import json as _json
 
 _bundle_manifest_path = Path(__file__).parent / 'bundle.json'
-_bundle_rules: list = []
+_bundle_sources: list = []
 _bundle_tools: list = []
 
 if _bundle_manifest_path.exists():
     with open(_bundle_manifest_path, 'r', encoding='utf-8') as _bf:
         _manifest = _json.load(_bf)
-    _bundle_rules = _manifest.get('rules', [])
+    _bundle_sources = _manifest.get('sources', [])
     _bundle_tools = _manifest.get('tools', [])
-    print(f"Bundle manifest: {len(_bundle_rules)} rules, {len(_bundle_tools)} tools")
+    print(f"Bundle manifest: {len(_bundle_sources)} sources, {len(_bundle_tools)} tools")
 else:
-    print("WARNING: bundle.json not found — no rules or tools will be bundled")
+    print("WARNING: bundle.json not found — no sources or tools will be bundled")
 
-# Collect bundled rules — only those listed in the manifest
-_rules_base = Path(__file__).parent / 'rules'
-for _rule_name in _bundle_rules:
-    _rule_dir = _rules_base / _rule_name
-    if not _rule_dir.is_dir():
-        print(f"WARNING: bundled rule '{_rule_name}' not found at {_rule_dir}")
+# Collect bundled sources — only those listed in the manifest
+_sources_base = Path(__file__).parent / 'sources'
+for _source_name in _bundle_sources:
+    _source_dir = _sources_base / _source_name
+    if not _source_dir.is_dir():
+        print(f"WARNING: bundled source '{_source_name}' not found at {_source_dir}")
         continue
-    rule_files = [str(_f) for _f in sorted(_rule_dir.iterdir()) if _f.is_file()]
-    if rule_files:
-        DATA_FILES.append((f'rules/{_rule_name}', rule_files))
-        print(f"  bundle rule: {_rule_name} ({len(rule_files)} files)")
+    source_files = [str(_f) for _f in sorted(_source_dir.iterdir()) if _f.is_file()]
+    if source_files:
+        DATA_FILES.append((f'sources/{_source_name}', source_files))
+        print(f"  bundle source: {_source_name} ({len(source_files)} files)")
 
 # Collect bundled tools — only those listed in the manifest
 # Walks recursively to capture subdirectories (e.g. data/corrections.json)
@@ -139,8 +139,8 @@ OPTIONS = {
             'gui.dialogs',
             'gui.tool_dialogs',
             'gui.data_editors',
-            'gui.rule_dialogs',
-            'gui.rule_editor',
+            'gui.source_dialogs',
+            'gui.source_editor',
             'gui.versioning',
             'gui.main_window',
             # --- PyQt6: only the 4 modules actually imported ---

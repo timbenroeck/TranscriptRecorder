@@ -4,7 +4,7 @@
     "/Applications/Prisma Access Browser.app/Contents/MacOS/Prisma Access Browser",
     "/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams"
   ],
-  "rules_to_find_transcript_table": [
+  "transcript_search_paths": [
     {
       "path_name": "Window Path",
       "steps": [

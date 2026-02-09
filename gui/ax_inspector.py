@@ -2,7 +2,7 @@
 Accessibility Inspector — interactive tool for exploring the macOS
 accessibility tree of running applications.
 
-Helps build ``rules_to_find_transcript_table`` by letting the user:
+Helps build ``transcript_search_paths`` by letting the user:
   1. Browse running GUI apps with searchable window titles.
   2. Serialize and filter the accessibility tree for a chosen process.
   3. Select a node and auto-generate a minimal search rule.
@@ -359,7 +359,7 @@ class _AXTreeWorker(QThread):
 # ---------------------------------------------------------------------------
 
 class AccessibilityInspectorDialog(QMainWindow):
-    """Two-panel accessibility inspector for building transcript rules."""
+    """Two-panel accessibility inspector for building transcript search paths."""
 
     def __init__(self, parent=None):
         super().__init__(parent)

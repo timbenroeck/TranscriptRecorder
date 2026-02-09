@@ -24,12 +24,12 @@ CONFIG_PATH = APP_SUPPORT_DIR / "config.json"
 LOG_DIR = APP_SUPPORT_DIR / ".logs"
 DEFAULT_EXPORT_DIR = Path.home() / "Documents" / "TranscriptRecordings"  # suggestion only (shown in file dialogs)
 
-# --- Built-in Manual Recording Rule ---
-# This is a virtual rule that does not live on disk.  It allows the user to
-# paste a transcript manually without needing any capture rules or accessibility
-# permissions.  The key is never written to the rules directory.
+# --- Built-in Manual Recording Source ---
+# This is a virtual source that does not live on disk.  It allows the user to
+# paste a transcript manually without needing any capture sources or accessibility
+# permissions.  The key is never written to the sources directory.
 MANUAL_RECORDING_KEY = "manual"
-MANUAL_RECORDING_RULE = {
+MANUAL_RECORDING_SOURCE = {
     "display_name": "Manual Recording",
     "description": "Paste or type a transcript manually — no live capture needed.",
 }

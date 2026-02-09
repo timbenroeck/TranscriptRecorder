@@ -1,9 +1,9 @@
 """
-Hash-based versioning and backup utilities for rules and tools.
+Hash-based versioning and backup utilities for sources and tools.
 
 Hashes are computed **only by CI** (see .github/workflows/hash-definitions.yml).
 The client never computes hashes -- it only reads and compares the .sha256
-sibling files that CI commits alongside each rule.json / tool.json.
+sibling files that CI commits alongside each source.json / tool.json.
 """
 import shutil
 import logging
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 def read_stored_hash(json_path: Path) -> Optional[str]:
     """Read the CI-authored ``.sha256`` sibling file for a JSON definition.
 
-    For example, given ``rules/zoom/rule.json`` this reads
-    ``rules/zoom/rule.json.sha256``.
+    For example, given ``sources/zoom/source.json`` this reads
+    ``sources/zoom/source.json.sha256``.
 
     Returns:
         The hash string (stripped), or ``None`` if the file is missing
@@ -87,7 +87,7 @@ def backup_data_files(
 
     *data_files* is a list of dicts, each with a ``"file"`` key containing
     a relative path from the JSON file's parent directory.  This matches
-    the ``data_files`` array in ``tool.json`` / ``rule.json``.
+    the ``data_files`` array in ``tool.json`` / ``source.json``.
 
     Returns:
         A list of backup ``Path`` objects that were created.

@@ -1,10 +1,10 @@
-name: Hash Rule & Tool Definitions
+name: Hash Source & Tool Definitions
 
 on:
   push:
     branches: [main]
     paths:
-      - 'rules/**/rule.json'
+      - 'sources/**/source.json'
       - 'tools/**/tool.json'
 
 permissions:
@@ -24,8 +24,8 @@ jobs:
         run: |
           changed=0
 
-          # Hash every rule.json
-          for f in rules/*/rule.json; do
+          # Hash every source.json
+          for f in sources/*/source.json; do
             [ -f "$f" ] || continue
             hash=$(sha256sum "$f" | awk '{print $1}')
             hash_file="${f}.sha256"

@@ -83,7 +83,7 @@ class TranscriptRecorder:
         Args:
             app_config: An application-specific configuration dictionary.
                         Must include 'base_transcript_directory' (str),
-                        and typically 'rules_to_find_transcript_table' (list),
+                        and typically 'transcript_search_paths' (list),
                         'traversal_roles_to_skip' (list),
                         'serialization_text_element_roles' (list).
                         May include 'name' (str) for app identification in logs/filenames,
@@ -220,10 +220,10 @@ class TranscriptRecorder:
             self.logger.debug(f"Process search: found {len(found_pids_list)} process(es) for '{self.app_identifier}': {found_pids_list}")
         return found_pids_list
 
-    async def _check_ax_match(self, element: Any, rule_criteria: Dict[str, Any]) -> bool:
-        """Checks if an element matches all criteria in rule_criteria."""
+    async def _check_ax_match(self, element: Any, match_criteria: Dict[str, Any]) -> bool:
+        """Checks if an element matches all criteria in match_criteria."""
         if not element: return False
-        for key, expected_value in rule_criteria.items():
+        for key, expected_value in match_criteria.items():
             if key in ["search_scope", "index"]: continue # Handled by caller
 
             actual_value = None
@@ -245,8 +245,8 @@ class TranscriptRecorder:
                 if not (desc_val and isinstance(desc_val, str) and expected_value.lower() in desc_val.lower()): return False
         return True
 
-    async def _search_descendants_for_matches(self, start_node: Any, criteria_rule: Dict[str, Any], levels_to_search: int, roles_to_skip: Optional[List[str]] = None) -> List[Any]:
-        """Performs a BFS to find descendants matching criteria_rule."""
+    async def _search_descendants_for_matches(self, start_node: Any, search_criteria: Dict[str, Any], levels_to_search: int, roles_to_skip: Optional[List[str]] = None) -> List[Any]:
+        """Performs a BFS to find descendants matching search_criteria."""
         matches: List[Any] = []
         if not start_node: return matches
 
@@ -263,7 +263,7 @@ class TranscriptRecorder:
 
             if current_depth > effective_levels: continue
 
-            if await self._check_ax_match(current_ax_element, criteria_rule):
+            if await self._check_ax_match(current_ax_element, search_criteria):
                 matches.append(current_ax_element)
 
             if current_depth < effective_levels: # Only get children if we can go deeper
@@ -282,7 +282,7 @@ class TranscriptRecorder:
 
     async def find_transcript_element(self) -> bool:
         """
-        Attempts to find the transcript element based on rules in app_config.
+        Attempts to find the transcript element based on search paths in app_config.
         Sets self.transcript_element if found.
 
         Returns:
@@ -299,9 +299,9 @@ class TranscriptRecorder:
             self._transcript_element = None
             return False # App not running
 
-        rules_path_options = self.app_config.get("rules_to_find_transcript_table", [])
-        if not rules_path_options:
-            self.logger.warning(f"Element search: no 'rules_to_find_transcript_table' in config for '{self.app_identifier}'")
+        search_path_options = self.app_config.get("transcript_search_paths", [])
+        if not search_path_options:
+            self.logger.warning(f"Element search: no 'transcript_search_paths' in config for '{self.app_identifier}'")
             self._transcript_element = None
             return False
 
@@ -316,18 +316,18 @@ class TranscriptRecorder:
 
             self.logger.debug(f"Element search: created AXUIElement for PID {pid}: {await self._get_element_descriptor(app_ref)}")
 
-            for path_idx, path_option in enumerate(rules_path_options):
+            for path_idx, path_option in enumerate(search_path_options):
                 path_name = path_option.get("path_name", f"PathOption-{path_idx+1}")
-                self.logger.debug(f"Element search: trying rule path '{path_name}' for PID {pid}")
+                self.logger.debug(f"Element search: trying search path '{path_name}' for PID {pid}")
                 current_elements_to_search = [app_ref] # Start search from the app root
 
-                for step_idx, step_rule in enumerate(path_option.get("steps", [])):
-                    self.logger.debug(f"Element search: path '{path_name}', step {step_idx+1}: {step_rule}")
+                for step_idx, step_def in enumerate(path_option.get("steps", [])):
+                    self.logger.debug(f"Element search: path '{path_name}', step {step_idx+1}: {step_def}")
                     elements_found_this_step: List[Any] = []
-                    search_scope = step_rule.get("search_scope", {})
+                    search_scope = step_def.get("search_scope", {})
                     levels_deep = search_scope.get("levels_deep", 1) # Default depth
-                    index_to_select = step_rule.get("index") # Optional index
-                    criteria_for_match = {k: v for k, v in step_rule.items() if k not in ["search_scope", "index"]}
+                    index_to_select = step_def.get("index") # Optional index
+                    criteria_for_match = {k: v for k, v in step_def.items() if k not in ["search_scope", "index"]}
 
                     for parent_element in current_elements_to_search:
                         discovered_matches = await self._search_descendants_for_matches(parent_element, criteria_for_match, levels_deep, roles_to_skip)
@@ -357,9 +357,9 @@ class TranscriptRecorder:
                     self.logger.debug(f"Element search: target element: {await self._get_element_descriptor(final_target)}")
                     self._transcript_element = final_target
                     return True
-            self.logger.debug(f"Element search: all rule paths exhausted for PID {pid}")
+            self.logger.debug(f"Element search: all search paths exhausted for PID {pid}")
 
-        self.logger.warning(f"Element search: transcript element not found for '{self.app_identifier}' (checked {len(pids)} PIDs, {len(rules_path_options)} rule paths)")
+        self.logger.warning(f"Element search: transcript element not found for '{self.app_identifier}' (checked {len(pids)} PIDs, {len(search_path_options)} search paths)")
         self._transcript_element = None
         return False
 

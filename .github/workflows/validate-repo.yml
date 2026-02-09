@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'rules/**'
+      - 'sources/**'
       - 'tools/**'
       - 'bundle.json'
   pull_request:
     paths:
-      - 'rules/**'
+      - 'sources/**'
       - 'tools/**'
       - 'bundle.json'
 
@@ -19,11 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for reserved rule names
+      - name: Check for reserved source names
         run: |
           RESERVED="manual"
-          if [ -d "rules/$RESERVED" ]; then
-            echo "::error::rules/$RESERVED/ is a reserved name used by the built-in Manual Recording rule. Rename this directory."
+          if [ -d "sources/$RESERVED" ]; then
+            echo "::error::sources/$RESERVED/ is a reserved name used by the built-in Manual Recording source. Rename this directory."
             exit 1
           fi
           echo "No reserved name conflicts found."
@@ -31,7 +31,7 @@ jobs:
       - name: Validate bundle.json
         run: |
           if [ ! -f bundle.json ]; then
-            echo "::error::bundle.json not found — the build will not bundle any rules or tools."
+            echo "::error::bundle.json not found — the build will not bundle any sources or tools."
             exit 1
           fi
           python3 -c "
@@ -39,10 +39,10 @@ jobs:
           with open('bundle.json') as f:
               manifest = json.load(f)
           errors = []
-          for rule in manifest.get('rules', []):
-              if rule == 'manual':
-                  errors.append(f\"bundle.json lists reserved rule name 'manual'\")
-          for kind in ('rules', 'tools'):
+          for source in manifest.get('sources', []):
+              if source == 'manual':
+                  errors.append(f\"bundle.json lists reserved source name 'manual'\")
+          for kind in ('sources', 'tools'):
               for name in manifest.get(kind, []):
                   import os
                   if not os.path.isdir(os.path.join(kind, name)):

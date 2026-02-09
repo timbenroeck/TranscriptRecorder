@@ -33,7 +33,7 @@ from version import __version__, GITHUB_OWNER, GITHUB_REPO
 import gui.constants as _constants
 from gui.constants import (
     APP_NAME, APP_VERSION, APP_SUPPORT_DIR, CONFIG_PATH, LOG_DIR,
-    DEFAULT_EXPORT_DIR, MANUAL_RECORDING_KEY, MANUAL_RECORDING_RULE,
+    DEFAULT_EXPORT_DIR, MANUAL_RECORDING_KEY, MANUAL_RECORDING_SOURCE,
     logger, setup_logging, resource_path, _HAS_APPKIT,
 )
 from gui.styles import get_application_stylesheet
@@ -70,8 +70,8 @@ class TranscriptRecorderApp(QMainWindow):
         self.capture_interval = 30  # Default capture interval in seconds
         self.theme_mode = "system"  # "light", "dark", or "system"
         self.meeting_details_dirty = False  # Track if meeting details need saving
-        self._discovered_rules: Dict[str, dict] = {}  # rule_key -> parsed rule.json
-        self._rules_dir: Optional[Path] = None
+        self._discovered_sources: Dict[str, dict] = {}  # source_key -> parsed source.json
+        self._sources_dir: Optional[Path] = None
         self._discovered_tools: Dict[str, dict] = {}  # tool_key -> parsed JSON definition
         self._tool_scripts_dir: Optional[Path] = None
         self._tool_runner: Optional[ToolRunnerWorker] = None
@@ -87,7 +87,7 @@ class TranscriptRecorderApp(QMainWindow):
         self._maximized_size = QSize(960, 720)
         self._has_accessibility = True  # Assume granted; _check_permissions will update
         self._closing = False  # Set when the app is about to exit (e.g. user cancelled setup)
-        self._is_manual_mode = False  # True when the built-in Manual Recording rule is active
+        self._is_manual_mode = False  # True when the built-in Manual Recording source is active
         self._transcript_edit_mode = False  # True when the transcript is user-editable
         self._transcript_modified = False  # True when transcript has unsaved edits
         self._is_history_session = False  # True when session was loaded from history
@@ -851,40 +851,40 @@ class TranscriptRecorderApp(QMainWindow):
         refresh_tools_action.triggered.connect(self._scan_tools)
         tools_menu.addAction(refresh_tools_action)
         
-        # Rules menu
-        rules_menu = menubar.addMenu("Rules")
+        # Sources menu
+        sources_menu = menubar.addMenu("Sources")
         
-        import_rules_action = QAction("Import Rules", self)
-        import_rules_action.triggered.connect(self._show_rule_import)
-        rules_menu.addAction(import_rules_action)
+        import_sources_action = QAction("Import Sources", self)
+        import_sources_action.triggered.connect(self._show_source_import)
+        sources_menu.addAction(import_sources_action)
         
-        edit_rule_action = QAction("Edit Rule", self)
-        edit_rule_action.triggered.connect(self._show_rule_editor)
-        rules_menu.addAction(edit_rule_action)
+        edit_source_action = QAction("Edit Source", self)
+        edit_source_action.triggered.connect(self._show_source_editor)
+        sources_menu.addAction(edit_source_action)
         
         ax_inspector_action = QAction("Accessibility Inspector", self)
         ax_inspector_action.triggered.connect(self._show_ax_inspector)
-        rules_menu.addAction(ax_inspector_action)
+        sources_menu.addAction(ax_inspector_action)
         
-        rules_menu.addSeparator()
+        sources_menu.addSeparator()
         
-        set_default_rule_action = QAction("Set Current as Default", self)
-        set_default_rule_action.triggered.connect(self._on_set_default_rule)
-        rules_menu.addAction(set_default_rule_action)
+        set_default_source_action = QAction("Set Current as Default", self)
+        set_default_source_action.triggered.connect(self._on_set_default_source)
+        sources_menu.addAction(set_default_source_action)
         
-        clear_default_rule_action = QAction("Clear Default", self)
-        clear_default_rule_action.triggered.connect(self._on_clear_default_rule)
-        rules_menu.addAction(clear_default_rule_action)
+        clear_default_source_action = QAction("Clear Default", self)
+        clear_default_source_action.triggered.connect(self._on_clear_default_source)
+        sources_menu.addAction(clear_default_source_action)
         
-        rules_menu.addSeparator()
+        sources_menu.addSeparator()
         
-        open_rules_folder_action = QAction("Open Rules Folder", self)
-        open_rules_folder_action.triggered.connect(self._open_rules_folder)
-        rules_menu.addAction(open_rules_folder_action)
+        open_sources_folder_action = QAction("Open Sources Folder", self)
+        open_sources_folder_action.triggered.connect(self._open_sources_folder)
+        sources_menu.addAction(open_sources_folder_action)
         
-        refresh_rules_action = QAction("Refresh Rules", self)
-        refresh_rules_action.triggered.connect(self._scan_rules)
-        rules_menu.addAction(refresh_rules_action)
+        refresh_sources_action = QAction("Refresh Sources", self)
+        refresh_sources_action.triggered.connect(self._scan_sources)
+        sources_menu.addAction(refresh_sources_action)
         
         # Maintenance menu
         maint_menu = menubar.addMenu("Maintenance")
@@ -1014,12 +1014,12 @@ class TranscriptRecorderApp(QMainWindow):
             self.export_base_dir = Path(export_dir).expanduser().resolve()
             self.export_base_dir.mkdir(parents=True, exist_ok=True)
 
-            # Ensure tools and rules directories exist
+            # Ensure tools and sources directories exist
             (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
-            (self.export_base_dir / "rules").mkdir(parents=True, exist_ok=True)
+            (self.export_base_dir / "sources").mkdir(parents=True, exist_ok=True)
             
-            # Copy bundled rules and tools if not already present (first run)
-            self._install_bundled_rules()
+            # Copy bundled sources and tools if not already present (first run)
+            self._install_bundled_sources()
             self._install_bundled_tools()
             
             # Configure logging from config
@@ -1030,13 +1030,13 @@ class TranscriptRecorderApp(QMainWindow):
             for action in self._log_level_group.actions():
                 action.setChecked(action.text() == saved_level)
             
-            # Scan for rules and tools
-            self._scan_rules()
+            # Scan for sources and tools
+            self._scan_sources()
             self._scan_tools()
             
             log_level = self.config.get("logging", {}).get("level", "INFO")
-            file_rules = len(self._discovered_rules) - 1  # subtract built-in Manual Recording
-            logger.info(f"Config: loaded from {CONFIG_PATH} ({file_rules} rules + Manual Recording, log_level={log_level})")
+            file_sources = len(self._discovered_sources) - 1  # subtract built-in Manual Recording
+            logger.info(f"Config: loaded from {CONFIG_PATH} ({file_sources} sources + Manual Recording, log_level={log_level})")
             self.statusBar().showMessage("Configuration loaded")
             
         except json.JSONDecodeError as e:
@@ -1051,38 +1051,38 @@ class TranscriptRecorderApp(QMainWindow):
             )
             logger.error(f"Config load error: {e}", exc_info=True)
     
-    def _install_bundled_rules(self):
-        """Copy bundled rule files from the app bundle into the export dir.
+    def _install_bundled_sources(self):
+        """Copy bundled source files from the app bundle into the export dir.
 
-        Only copies rules that do not already exist locally, so user
+        Only copies sources that do not already exist locally, so user
         customisations are never overwritten.
         """
-        rules_dir = self.export_base_dir / "rules"
-        bundled_rules_dir = resource_path("rules")
+        sources_dir = self.export_base_dir / "sources"
+        bundled_sources_dir = resource_path("sources")
 
-        if not bundled_rules_dir.exists() or not bundled_rules_dir.is_dir():
-            logger.debug("Bundled rules directory not found — skipping install")
+        if not bundled_sources_dir.exists() or not bundled_sources_dir.is_dir():
+            logger.debug("Bundled sources directory not found — skipping install")
             return
 
-        for bundled_rule_dir in sorted(bundled_rules_dir.iterdir()):
-            if not bundled_rule_dir.is_dir():
+        for bundled_source_dir in sorted(bundled_sources_dir.iterdir()):
+            if not bundled_source_dir.is_dir():
                 continue
-            src_rule = bundled_rule_dir / "rule.json"
-            if not src_rule.exists():
+            src_source = bundled_source_dir / "source.json"
+            if not src_source.exists():
                 continue
 
-            dest_dir = rules_dir / bundled_rule_dir.name
-            dest_rule = dest_dir / "rule.json"
-            if dest_rule.exists():
-                continue  # Don't overwrite existing user rules
+            dest_dir = sources_dir / bundled_source_dir.name
+            dest_source = dest_dir / "source.json"
+            if dest_source.exists():
+                continue  # Don't overwrite existing user sources
 
             dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(src_rule), str(dest_rule))
+            shutil.copy2(str(src_source), str(dest_source))
             # Also copy the .sha256 if present
-            src_hash = bundled_rule_dir / "rule.json.sha256"
+            src_hash = bundled_source_dir / "source.json.sha256"
             if src_hash.exists():
-                shutil.copy2(str(src_hash), str(dest_dir / "rule.json.sha256"))
-            logger.info(f"Bundled rules: installed {bundled_rule_dir.name}")
+                shutil.copy2(str(src_hash), str(dest_dir / "source.json.sha256"))
+            logger.info(f"Bundled sources: installed {bundled_source_dir.name}")
 
     def _install_bundled_tools(self):
         """Copy bundled tool directories from the app bundle into the export dir.
@@ -1121,107 +1121,107 @@ class TranscriptRecorderApp(QMainWindow):
 
             logger.info(f"Bundled tools: installed {bundled_tool_dir.name}")
 
-    def _scan_rules(self):
-        """Scan ``<export_dir>/rules/`` for rule definitions and populate the app combo.
+    def _scan_sources(self):
+        """Scan ``<export_dir>/sources/`` for source definitions and populate the app combo.
 
         The built-in Manual Recording entry is always inserted first so the
-        app is functional on first launch even without downloaded rules.
+        app is functional on first launch even without downloaded sources.
         """
-        self._discovered_rules = {}
+        self._discovered_sources = {}
         self.app_combo.clear()
 
         # Always add the built-in Manual Recording entry first
-        self._discovered_rules[MANUAL_RECORDING_KEY] = MANUAL_RECORDING_RULE
+        self._discovered_sources[MANUAL_RECORDING_KEY] = MANUAL_RECORDING_SOURCE
         self.app_combo.addItem(
-            MANUAL_RECORDING_RULE["display_name"], MANUAL_RECORDING_KEY
+            MANUAL_RECORDING_SOURCE["display_name"], MANUAL_RECORDING_KEY
         )
 
         if not self.export_base_dir:
             return
 
-        self._rules_dir = self.export_base_dir / "rules"
+        self._sources_dir = self.export_base_dir / "sources"
 
         try:
-            self._rules_dir.mkdir(parents=True, exist_ok=True)
+            self._sources_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            logger.error(f"Rules: failed to create rules directory: {e}")
+            logger.error(f"Sources: failed to create sources directory: {e}")
             return
 
         try:
             subdirs = sorted(
-                p for p in self._rules_dir.iterdir() if p.is_dir()
+                p for p in self._sources_dir.iterdir() if p.is_dir()
             )
         except OSError as e:
-            logger.error(f"Rules: could not list rules directory: {e}")
+            logger.error(f"Sources: could not list sources directory: {e}")
             return
 
-        for rule_dir in subdirs:
+        for source_dir in subdirs:
             # Guard: the "manual" key is reserved for the built-in Manual Recording
-            if rule_dir.name == MANUAL_RECORDING_KEY:
-                logger.warning(f"Rules: skipping rules/{rule_dir.name}/ — "
+            if source_dir.name == MANUAL_RECORDING_KEY:
+                logger.warning(f"Sources: skipping sources/{source_dir.name}/ — "
                                f"'{MANUAL_RECORDING_KEY}' is a reserved name")
                 continue
 
-            json_path = rule_dir / "rule.json"
+            json_path = source_dir / "source.json"
             if not json_path.exists():
-                logger.debug(f"Rules: no rule.json in {rule_dir.name}/ — skipped")
+                logger.debug(f"Sources: no source.json in {source_dir.name}/ — skipped")
                 continue
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
-                    rule_def = json.load(f)
+                    source_def = json.load(f)
 
-                if not rule_def.get("display_name"):
-                    logger.warning(f"Rules: {rule_dir.name}/rule.json missing 'display_name'")
+                if not source_def.get("display_name"):
+                    logger.warning(f"Sources: {source_dir.name}/source.json missing 'display_name'")
                     continue
 
-                rule_def["_rule_dir"] = str(rule_dir)
-                rule_def["_json_path"] = str(json_path)
+                source_def["_source_dir"] = str(source_dir)
+                source_def["_json_path"] = str(json_path)
 
-                rule_key = rule_dir.name
-                self._discovered_rules[rule_key] = rule_def
-                self.app_combo.addItem(rule_def["display_name"], rule_key)
+                source_key = source_dir.name
+                self._discovered_sources[source_key] = source_def
+                self.app_combo.addItem(source_def["display_name"], source_key)
 
-                logger.debug(f"Rules: discovered '{rule_def['display_name']}' in {rule_dir.name}/")
+                logger.debug(f"Sources: discovered '{source_def['display_name']}' in {source_dir.name}/")
 
             except json.JSONDecodeError as e:
-                logger.warning(f"Rules: invalid JSON in {rule_dir.name}/rule.json: {e}")
+                logger.warning(f"Sources: invalid JSON in {source_dir.name}/source.json: {e}")
             except Exception as e:
-                logger.error(f"Rules: error loading {rule_dir.name}/rule.json: {e}")
+                logger.error(f"Sources: error loading {source_dir.name}/source.json: {e}")
 
         # Count excludes the built-in Manual Recording entry
-        file_rule_count = len(self._discovered_rules) - 1  # subtract built-in
-        if file_rule_count > 0:
-            logger.info(f"Rules: discovered {file_rule_count} rule(s) in {self._rules_dir}")
+        file_source_count = len(self._discovered_sources) - 1  # subtract built-in
+        if file_source_count > 0:
+            logger.info(f"Sources: discovered {file_source_count} source(s) in {self._sources_dir}")
         else:
-            logger.debug(f"Rules: no rules found in {self._rules_dir}")
+            logger.debug(f"Sources: no sources found in {self._sources_dir}")
 
         if self.app_combo.count() > 0:
-            self._apply_default_rule()
+            self._apply_default_source()
     
-    def _apply_default_rule(self):
-        """Select the default rule in the app combo, or fall back to index 0."""
+    def _apply_default_source(self):
+        """Select the default source in the app combo, or fall back to index 0."""
         default_key = ""
         if self.config:
-            default_key = self.config.get("client_settings", {}).get("default_rule", "")
+            default_key = self.config.get("client_settings", {}).get("default_source", "")
         
         if default_key:
             for i in range(self.app_combo.count()):
                 if self.app_combo.itemData(i) == default_key:
                     self.app_combo.setCurrentIndex(i)
                     self._on_app_changed(i)
-                    logger.debug(f"Rules: selected default rule '{default_key}'")
+                    logger.debug(f"Sources: selected default source '{default_key}'")
                     return
-            # Default rule not found among discovered rules
-            logger.warning(f"Rules: configured default_rule '{default_key}' not found, using first rule")
+            # Default source not found among discovered sources
+            logger.warning(f"Sources: configured default_source '{default_key}' not found, using first source")
         
         self.app_combo.setCurrentIndex(0)
         self._on_app_changed(0)
     
-    def _on_set_default_rule(self):
-        """Save the currently selected rule as the default in config."""
+    def _on_set_default_source(self):
+        """Save the currently selected source as the default in config."""
         current_key = self.app_combo.currentData()
         if not current_key:
-            ThemedMessageDialog.info(self, "No Rule Selected", "Please select a rule first.")
+            ThemedMessageDialog.info(self, "No Source Selected", "Please select a source first.")
             return
         
         display_name = self.app_combo.currentText()
@@ -1232,37 +1232,37 @@ class TranscriptRecorderApp(QMainWindow):
             
             if "client_settings" not in config_data:
                 config_data["client_settings"] = {}
-            config_data["client_settings"]["default_rule"] = current_key
+            config_data["client_settings"]["default_source"] = current_key
             
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2)
             
             self.config = config_data
-            self.statusBar().showMessage(f"Default rule set to '{display_name}'")
-            logger.info(f"Config: default_rule set to '{current_key}' ({display_name})")
+            self.statusBar().showMessage(f"Default source set to '{display_name}'")
+            logger.info(f"Config: default_source set to '{current_key}' ({display_name})")
         except Exception as e:
-            logger.error(f"Config: failed to save default_rule: {e}")
-            ThemedMessageDialog.critical(self, "Error", f"Failed to save default rule: {e}")
+            logger.error(f"Config: failed to save default_source: {e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to save default source: {e}")
     
-    def _on_clear_default_rule(self):
-        """Clear the default rule setting from config."""
+    def _on_clear_default_source(self):
+        """Clear the default source setting from config."""
         try:
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
             
             if "client_settings" not in config_data:
                 config_data["client_settings"] = {}
-            config_data["client_settings"]["default_rule"] = ""
+            config_data["client_settings"]["default_source"] = ""
             
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2)
             
             self.config = config_data
-            self.statusBar().showMessage("Default rule cleared")
-            logger.info("Config: default_rule cleared")
+            self.statusBar().showMessage("Default source cleared")
+            logger.info("Config: default_source cleared")
         except Exception as e:
-            logger.error(f"Config: failed to clear default_rule: {e}")
-            ThemedMessageDialog.critical(self, "Error", f"Failed to clear default rule: {e}")
+            logger.error(f"Config: failed to clear default_source: {e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to clear default source: {e}")
             
     def _check_permissions(self):
         """Check and warn about accessibility permissions."""
@@ -1298,8 +1298,8 @@ class TranscriptRecorderApp(QMainWindow):
         self.selected_app_key = self.app_combo.currentData()
         self._is_manual_mode = (self.selected_app_key == MANUAL_RECORDING_KEY)
 
-        if self.selected_app_key and self._discovered_rules:
-            app_config = self._discovered_rules.get(self.selected_app_key, {})
+        if self.selected_app_key and self._discovered_sources:
+            app_config = self._discovered_sources.get(self.selected_app_key, {})
             self.capture_interval = app_config.get("monitor_interval_seconds", 30)
             logger.debug(f"App selection changed: {self.selected_app_key} "
                          f"(manual={self._is_manual_mode}, capture interval: {self.capture_interval}s)")
@@ -1307,18 +1307,18 @@ class TranscriptRecorderApp(QMainWindow):
     def _on_new_recording(self):
         """Start a new recording session.
 
-        For the built-in Manual Recording rule no ``TranscriptRecorder`` is
+        For the built-in Manual Recording source no ``TranscriptRecorder`` is
         created — the user edits the transcript text area directly.
         """
-        if not self.selected_app_key or not self._discovered_rules:
+        if not self.selected_app_key or not self._discovered_sources:
             logger.warning("New session: no application selected")
             ThemedMessageDialog.warning(self, "No Application", "Please select a meeting application first.")
             return
             
-        app_config = self._discovered_rules.get(self.selected_app_key, {})
+        app_config = self._discovered_sources.get(self.selected_app_key, {})
         if not app_config:
-            logger.error(f"New session: no rule found for {self.selected_app_key}")
-            ThemedMessageDialog.warning(self, "Rule Error", f"No rule found for {self.selected_app_key}")
+            logger.error(f"New session: no source found for {self.selected_app_key}")
+            ThemedMessageDialog.warning(self, "Source Error", f"No source found for {self.selected_app_key}")
             return
             
         # Reset state
@@ -1464,9 +1464,9 @@ class TranscriptRecorderApp(QMainWindow):
         # Switch back to Meeting Details tab
         self.tab_widget.setCurrentIndex(0)
         
-        # Restore the default rule selection
+        # Restore the default source selection
         if self.app_combo.count() > 0:
-            self._apply_default_rule()
+            self._apply_default_source()
         
         self._update_button_states()
         self._set_status("Ready")
@@ -1481,18 +1481,18 @@ class TranscriptRecorderApp(QMainWindow):
         if not self.current_recording_path:
             return False
         
-        if not self.selected_app_key or not self._discovered_rules:
+        if not self.selected_app_key or not self._discovered_sources:
             ThemedMessageDialog.warning(
                 self, "No Application Selected",
                 "Please select a meeting application before capturing."
             )
             return False
         
-        app_config = self._discovered_rules.get(self.selected_app_key, {})
+        app_config = self._discovered_sources.get(self.selected_app_key, {})
         if not app_config:
             ThemedMessageDialog.warning(
-                self, "Rule Error",
-                f"No rule found for {self.selected_app_key}"
+                self, "Source Error",
+                f"No source found for {self.selected_app_key}"
             )
             return False
         
@@ -3121,56 +3121,56 @@ class TranscriptRecorderApp(QMainWindow):
         tools_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(["open", str(tools_dir)])
 
-    def _show_rule_import(self):
-        """Open the Rule Import dialog."""
-        from gui.rule_dialogs import RuleImportDialog
-        rules_dir = self.export_base_dir / "rules"
-        rules_dir.mkdir(parents=True, exist_ok=True)
-        self._rule_import_dialog = RuleImportDialog(rules_dir, self)
-        self._rule_import_dialog.rules_imported.connect(self._scan_rules)
-        self._rule_import_dialog.show()
+    def _show_source_import(self):
+        """Open the Source Import dialog."""
+        from gui.source_dialogs import SourceImportDialog
+        sources_dir = self.export_base_dir / "sources"
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        self._source_import_dialog = SourceImportDialog(sources_dir, self)
+        self._source_import_dialog.sources_imported.connect(self._scan_sources)
+        self._source_import_dialog.show()
 
-    def _show_rule_editor(self):
-        """Open the Rule Editor for a selected rule."""
-        from gui.rule_editor import RuleEditorDialog
-        rules_dir = self.export_base_dir / "rules"
-        if not rules_dir.exists():
-            ThemedMessageDialog.info(self, "No Rules", "No rules directory found.")
+    def _show_source_editor(self):
+        """Open the Source Editor for a selected source."""
+        from gui.source_editor import SourceEditorDialog
+        sources_dir = self.export_base_dir / "sources"
+        if not sources_dir.exists():
+            ThemedMessageDialog.info(self, "No Sources", "No sources directory found.")
             return
 
-        rule_dirs = sorted(
-            p for p in rules_dir.iterdir()
-            if p.is_dir() and (p / "rule.json").exists()
+        source_dirs = sorted(
+            p for p in sources_dir.iterdir()
+            if p.is_dir() and (p / "source.json").exists()
         )
 
-        if not rule_dirs:
+        if not source_dirs:
             ThemedMessageDialog.info(
-                self, "No Rules",
-                "No rules with a rule.json file were found. "
-                "Use Rules > Import Rules to install rules first."
+                self, "No Sources",
+                "No sources with a source.json file were found. "
+                "Use Sources > Import Sources to install sources first."
             )
             return
 
-        if len(rule_dirs) == 1:
-            chosen = rule_dirs[0]
+        if len(source_dirs) == 1:
+            chosen = source_dirs[0]
         else:
-            names = [d.name for d in rule_dirs]
+            names = [d.name for d in source_dirs]
             name, ok = QInputDialog.getItem(
                 self,
-                "Select Rule",
-                "Choose a rule to edit:",
+                "Select Source",
+                "Choose a source to edit:",
                 names,
                 0,
                 False,
             )
             if not ok:
                 return
-            chosen = rules_dir / name
+            chosen = sources_dir / name
 
-        rule_json_path = chosen / "rule.json"
-        self._rule_editor = RuleEditorDialog(rule_json_path, self)
-        self._rule_editor.rule_saved.connect(self._scan_rules)
-        self._rule_editor.show()
+        source_json_path = chosen / "source.json"
+        self._source_editor = SourceEditorDialog(source_json_path, self)
+        self._source_editor.source_saved.connect(self._scan_sources)
+        self._source_editor.show()
 
     def _show_ax_inspector(self):
         """Open the Accessibility Inspector window."""
@@ -3178,11 +3178,11 @@ class TranscriptRecorderApp(QMainWindow):
         self._ax_inspector = AccessibilityInspectorDialog(self)
         self._ax_inspector.show()
 
-    def _open_rules_folder(self):
-        """Open the rules directory in Finder."""
-        rules_dir = self.export_base_dir / "rules"
-        rules_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["open", str(rules_dir)])
+    def _open_sources_folder(self):
+        """Open the sources directory in Finder."""
+        sources_dir = self.export_base_dir / "sources"
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(sources_dir)])
     
     def _reload_configuration(self):
         """Reload the configuration file."""
@@ -3212,12 +3212,12 @@ class TranscriptRecorderApp(QMainWindow):
             self.export_base_dir = Path(export_dir).expanduser().resolve()
             self.export_base_dir.mkdir(parents=True, exist_ok=True)
             (self.export_base_dir / "tools").mkdir(parents=True, exist_ok=True)
-            (self.export_base_dir / "rules").mkdir(parents=True, exist_ok=True)
+            (self.export_base_dir / "sources").mkdir(parents=True, exist_ok=True)
             
-            self._scan_rules()
+            self._scan_sources()
             self._scan_tools()
             
-            logger.info(f"Config: reloaded from {CONFIG_PATH} ({len(self._discovered_rules)} rules)")
+            logger.info(f"Config: reloaded from {CONFIG_PATH} ({len(self._discovered_sources)} sources)")
             self.statusBar().showMessage("Configuration reloaded")
             
         except json.JSONDecodeError as e:
