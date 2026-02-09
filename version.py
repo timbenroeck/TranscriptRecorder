@@ -7,7 +7,7 @@ It can be auto-updated by build scripts.
 
 # Version components
 VERSION_MAJOR = 1
-VERSION_MINOR = 3
+VERSION_MINOR = 4
 VERSION_PATCH = 0
 
 # Full version string
