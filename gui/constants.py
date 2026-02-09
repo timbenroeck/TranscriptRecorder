@@ -28,7 +28,7 @@ DEFAULT_EXPORT_DIR = Path.home() / "Documents" / "TranscriptRecordings"  # sugge
 # This is a virtual rule that does not live on disk.  It allows the user to
 # paste a transcript manually without needing any capture rules or accessibility
 # permissions.  The key is never written to the rules directory.
-MANUAL_RECORDING_KEY = "__manual__"
+MANUAL_RECORDING_KEY = "manual"
 MANUAL_RECORDING_RULE = {
     "display_name": "Manual Recording",
     "description": "Paste or type a transcript manually — no live capture needed.",

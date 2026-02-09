@@ -246,7 +246,7 @@ Parameters with a `"builtin"` key are automatically resolved at run-time:
 | `meeting_transcript` | Full path to `meeting_transcript.txt` |
 | `meeting_details` | Full path to `meeting_details.txt` |
 | `export_directory` | Base export directory |
-| `app_name` | Key of the selected rule (e.g. `zoom`, `msteams`, `__manual__`) |
+| `app_name` | Key of the selected rule (e.g. `zoom`, `msteams`, `manual`) |
 
 ### Managing Tools
 
@@ -286,7 +286,7 @@ The application configuration is stored at `~/Library/Application Support/Transc
 | `logging.log_to_file` | Write logs to a rotating file |
 | `logging.log_file_name` | Log filename inside the `.logs` directory |
 | `client_settings.export_directory` | Where recordings, rules, and tools are stored |
-| `client_settings.default_rule` | Rule key selected on startup (e.g. `zoom`, `__manual__`) |
+| `client_settings.default_rule` | Rule key selected on startup (e.g. `zoom`, `manual`) |
 
 You can change the log level from **Maintenance → Log Level** without editing the file. Use **Maintenance → Change Export Directory...** to move your export location.
 

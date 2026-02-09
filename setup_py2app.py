@@ -127,12 +127,14 @@ OPTIONS = {
     'py2app': {
         'argv_emulation': False,
         'includes': [
+            # --- Application modules ---
             'transcript_recorder',
             'transcript_utils',
             'version',
             'gui',
             'gui.constants',
             'gui.styles',
+            'gui.icons',
             'gui.workers',
             'gui.dialogs',
             'gui.tool_dialogs',
@@ -141,6 +143,12 @@ OPTIONS = {
             'gui.rule_editor',
             'gui.versioning',
             'gui.main_window',
+            # --- PyQt6: only the 4 modules actually imported ---
+            'PyQt6.QtCore',
+            'PyQt6.QtGui',
+            'PyQt6.QtWidgets',
+            'PyQt6.QtSvg',
+            # --- Standard library ---
             'asyncio',
             'json',
             'logging',
@@ -153,24 +161,79 @@ OPTIONS = {
             'urllib.request',
             'urllib.error',
             'tempfile',
+            're',
+            'subprocess',
+            'collections',
+            'functools',
+            'os',
+            'signal',
+            'threading',
         ],
         'packages': [
-            'PyQt6',
             'psutil',
             'aiofiles',
             'gui',
         ],
         'excludes': [
+            # --- Build / packaging tools ---
             'tkinter',
-            'matplotlib',
-            'numpy',
-            'scipy',
-            'PIL',
             'pip',
             'setuptools',
             'pkg_resources',
             'wheel',
             '_distutils_hack',
+            # --- Heavy scientific / media libraries ---
+            'matplotlib',
+            'numpy',
+            'scipy',
+            'PIL',
+            # --- Unused PyQt6 sub-modules ---
+            'PyQt6.QtNetwork',
+            'PyQt6.QtSql',
+            'PyQt6.QtXml',
+            'PyQt6.QtBluetooth',
+            'PyQt6.QtMultimedia',
+            'PyQt6.QtMultimediaWidgets',
+            'PyQt6.QtWebEngine',
+            'PyQt6.QtWebEngineCore',
+            'PyQt6.QtWebEngineWidgets',
+            'PyQt6.QtWebSockets',
+            'PyQt6.QtWebChannel',
+            'PyQt6.QtPositioning',
+            'PyQt6.QtSerialPort',
+            'PyQt6.QtNfc',
+            'PyQt6.Qt3DCore',
+            'PyQt6.Qt3DRender',
+            'PyQt6.Qt3DInput',
+            'PyQt6.Qt3DExtras',
+            'PyQt6.QtTest',
+            'PyQt6.QtDesigner',
+            'PyQt6.QtHelp',
+            'PyQt6.QtDBus',
+            'PyQt6.QtOpenGL',
+            'PyQt6.QtOpenGLWidgets',
+            'PyQt6.QtPdf',
+            'PyQt6.QtPdfWidgets',
+            'PyQt6.QtRemoteObjects',
+            'PyQt6.QtSensors',
+            'PyQt6.QtTextToSpeech',
+            'PyQt6.QtQuick',
+            'PyQt6.QtQml',
+            'PyQt6.QtSpatialAudio',
+            # --- Unused standard library modules ---
+            'test',
+            'unittest',
+            'pydoc',
+            'doctest',
+            'idlelib',
+            'lib2to3',
+            'ensurepip',
+            'venv',
+            'distutils',
+            'curses',
+            'turtledemo',
+            'turtle',
+            'xmlrpc',
         ],
         'resources': DATA_FILES,
         'iconfile': 'appicon.icns',
@@ -207,3 +270,149 @@ setup(
     data_files=DATA_FILES,
     options=OPTIONS,
 )
+
+# ---------------------------------------------------------------------------
+# Post-build: strip unused Qt6 / PyQt6 files from the app bundle
+# ---------------------------------------------------------------------------
+# py2app's 'excludes' only prevents Python module *tracing*.  The PyQt6 and
+# PyQt6-Qt6 binary wheels ship ALL shared libraries, QML plugins, and Python
+# binding .so files in a single directory tree, so they all get copied into
+# the bundle.  We remove the ones we don't need to shrink the bundle and
+# drastically reduce the number of files that need code-signing.
+#
+# Three layers are cleaned:
+#   1. Qt6/qml/*        — QML plugin modules
+#   2. Qt6/plugins/*     — native plugin directories
+#   3. Qt6/lib/*.framework — Qt6 C++ framework bundles
+#   4. PyQt6/*.abi3.so   — Python binding .so files
+# ---------------------------------------------------------------------------
+if len(sys.argv) > 1 and sys.argv[1] == 'py2app':
+    _dist_dir = Path('dist')
+    _app_dir = _dist_dir / f'{APP_NAME}.app'
+    _resources = _app_dir / 'Contents' / 'Resources'
+
+    removed_count = 0
+
+    # ------------------------------------------------------------------
+    # Locate the PyQt6 and Qt6 directories inside the bundle
+    # ------------------------------------------------------------------
+    _pyqt6_candidates = list(_resources.rglob('PyQt6'))
+    _pyqt6_dir = None
+    for _c in _pyqt6_candidates:
+        if _c.is_dir() and (_c / 'Qt6').is_dir():
+            _pyqt6_dir = _c
+            break
+    _qt6_dir = _pyqt6_dir / 'Qt6' if _pyqt6_dir else None
+
+    # ------------------------------------------------------------------
+    # Layer 1 & 2: Strip unused QML modules and plugin directories
+    # ------------------------------------------------------------------
+    if _qt6_dir and _qt6_dir.is_dir():
+        # --- QML modules to remove (under Qt6/qml/) ---
+        _unwanted_qml = [
+            'QtQml',
+            'QtQuick',
+            'QtQuick3D',
+            'QtWebSockets',
+            'QtWebChannel',
+            'QtMultimedia',
+            'QtPositioning',
+            'QtRemoteObjects',
+            'QtSensors',
+            'QtTextToSpeech',
+            'QtTest',
+        ]
+
+        # --- Plugin directories to remove (under Qt6/plugins/) ---
+        # Keep: platforms, styles, iconengines, imageformats, tls,
+        #       sqldrivers, networkinformation, generic, permissions
+        _unwanted_plugins = [
+            'renderers',          # Qt3D
+            'sceneparsers',       # Qt3D
+            'assetimporters',     # Qt3D
+            'geometryloaders',    # Qt3D
+            'renderplugins',      # Qt3D
+            'sensors',            # QtSensors
+            'position',           # QtPositioning
+            'texttospeech',       # QtTextToSpeech
+            'webview',            # QtWebEngine
+            'multimedia',         # QtMultimedia
+            'qmllint',            # QML tooling
+        ]
+
+        _qml_dir = _qt6_dir / 'qml'
+        if _qml_dir.is_dir():
+            for name in _unwanted_qml:
+                target = _qml_dir / name
+                if target.is_dir():
+                    fc = sum(1 for _ in target.rglob('*') if _.is_file())
+                    shutil.rmtree(target)
+                    removed_count += fc
+                    print(f"  Stripped QML module: {name} ({fc} files)")
+
+        _plugins_dir = _qt6_dir / 'plugins'
+        if _plugins_dir.is_dir():
+            for name in _unwanted_plugins:
+                target = _plugins_dir / name
+                if target.is_dir():
+                    fc = sum(1 for _ in target.rglob('*') if _.is_file())
+                    shutil.rmtree(target)
+                    removed_count += fc
+                    print(f"  Stripped plugin dir: {name} ({fc} files)")
+
+        # ------------------------------------------------------------------
+        # Layer 3: Strip unused Qt6 lib/*.framework bundles
+        # ------------------------------------------------------------------
+        # Whitelist: only frameworks needed at C++ runtime for
+        # QtCore + QtGui + QtWidgets + QtSvg on macOS.
+        _keep_frameworks = {
+            'QtCore',
+            'QtGui',
+            'QtWidgets',
+            'QtSvg',
+            'QtSvgWidgets',       # SVG widget rendering
+            'QtDBus',             # macOS runtime dependency of QtCore
+            'QtOpenGL',           # RHI rendering backend for QtGui
+            'QtNetwork',          # internal Qt networking
+            'QtPrintSupport',     # widget print support
+        }
+
+        _lib_dir = _qt6_dir / 'lib'
+        if _lib_dir.is_dir():
+            for fw_path in sorted(_lib_dir.iterdir()):
+                if fw_path.is_dir() and fw_path.suffix == '.framework':
+                    fw_name = fw_path.stem  # e.g. "QtQuick3D"
+                    if fw_name not in _keep_frameworks:
+                        fc = sum(1 for _ in fw_path.rglob('*') if _.is_file())
+                        shutil.rmtree(fw_path)
+                        removed_count += fc
+                        print(f"  Stripped framework:  {fw_name}.framework ({fc} files)")
+
+    # ------------------------------------------------------------------
+    # Layer 4: Strip unused PyQt6 Python binding .abi3.so files
+    # ------------------------------------------------------------------
+    # Whitelist: only the .so files for modules actually imported.
+    if _pyqt6_dir and _pyqt6_dir.is_dir():
+        _keep_so = {
+            'sip',          # SIP binding layer (not .abi3.so but .cpython-*.so)
+            'QtCore',
+            'QtGui',
+            'QtWidgets',
+            'QtSvg',
+        }
+
+        for so_path in sorted(_pyqt6_dir.glob('*.abi3.so')):
+            # Filename like "QtWebSockets.abi3.so" → module name "QtWebSockets"
+            module_name = so_path.name.split('.')[0]
+            if module_name not in _keep_so:
+                so_path.unlink()
+                removed_count += 1
+                print(f"  Stripped binding:   {so_path.name}")
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+    if removed_count:
+        print(f"Post-build cleanup: removed {removed_count} unused Qt6/PyQt6 files")
+    else:
+        print("Post-build cleanup: no unused files found (already clean)")

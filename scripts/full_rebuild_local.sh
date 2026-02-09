@@ -67,7 +67,7 @@ echo ""
 
 # --- Step 3: Install dependencies (mirrors GitHub Action) ---
 echo "=== Step 3: Installing dependencies ==="
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip "setuptools<81"
 pip install -r requirements.txt
 pip install py2app
 

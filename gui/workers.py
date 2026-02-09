@@ -545,25 +545,11 @@ class ToolFetchWorker(QThread):
         self.download_finished.emit(installed, errors)
 
     def _download_tool(self, tool: dict):
-        """Download all files for a single tool directory."""
+        """Download all files for a single tool directory, including subdirectories."""
         from gui.tool_dialogs import _backup_tool_json
 
         name = tool["name"]
         contents_url = tool["url"]
-
-        # Fetch file listing for this tool directory
-        req = urllib.request.Request(
-            contents_url,
-            headers={
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": f"{APP_NAME}/{APP_VERSION}",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            files = json.loads(resp.read().decode("utf-8"))
-
-        if not isinstance(files, list):
-            raise ValueError(f"Unexpected response listing files for {name}")
 
         local_dir = self._local_tools_dir / name
         local_dir.mkdir(parents=True, exist_ok=True)
@@ -573,30 +559,59 @@ class ToolFetchWorker(QThread):
         if local_tool_json.exists():
             _backup_tool_json(local_tool_json)
 
-        for item in files:
-            if item.get("type") != "file":
-                continue
-            download_url = item.get("download_url")
-            if not download_url:
-                continue
+        self._download_directory(contents_url, local_dir, name)
 
-            file_name = item["name"]
-            self.download_progress.emit(f"  {name}/{file_name}")
+    def _download_directory(self, contents_url: str, local_dir: Path, display_prefix: str):
+        """Recursively download all files from a GitHub directory."""
+        req = urllib.request.Request(
+            contents_url,
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": f"{APP_NAME}/{APP_VERSION}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            items = json.loads(resp.read().decode("utf-8"))
 
-            file_req = urllib.request.Request(
-                download_url,
-                headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"},
-            )
-            with urllib.request.urlopen(file_req, timeout=30) as file_resp:
-                content = file_resp.read()
+        if not isinstance(items, list):
+            raise ValueError(f"Unexpected response listing files for {display_prefix}")
 
-            dest = local_dir / file_name
-            with open(dest, "wb") as f:
-                f.write(content)
+        for item in items:
+            item_type = item.get("type")
+            item_name = item.get("name", "")
 
-            # Make scripts executable
-            if file_name.endswith(".sh"):
-                dest.chmod(dest.stat().st_mode | 0o111)
+            if item_type == "dir":
+                # Recurse into subdirectory
+                sub_url = item.get("url")
+                if not sub_url:
+                    continue
+                sub_dir = local_dir / item_name
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                sub_prefix = f"{display_prefix}/{item_name}"
+                self.download_progress.emit(f"  {sub_prefix}/")
+                self._download_directory(sub_url, sub_dir, sub_prefix)
+
+            elif item_type == "file":
+                download_url = item.get("download_url")
+                if not download_url:
+                    continue
+
+                self.download_progress.emit(f"  {display_prefix}/{item_name}")
+
+                file_req = urllib.request.Request(
+                    download_url,
+                    headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"},
+                )
+                with urllib.request.urlopen(file_req, timeout=30) as file_resp:
+                    content = file_resp.read()
+
+                dest = local_dir / item_name
+                with open(dest, "wb") as f:
+                    f.write(content)
+
+                # Make scripts executable
+                if item_name.endswith(".sh"):
+                    dest.chmod(dest.stat().st_mode | 0o111)
 
 
 # ---------------------------------------------------------------------------

@@ -87,7 +87,10 @@ class TranscriptRecorderApp(QMainWindow):
         self._maximized_size = QSize(960, 720)
         self._has_accessibility = True  # Assume granted; _check_permissions will update
         self._is_manual_mode = False  # True when the built-in Manual Recording rule is active
-        self._manual_save_timer: Optional[QTimer] = None  # Debounce timer for manual transcript saves
+        self._transcript_edit_mode = False  # True when the transcript is user-editable
+        self._transcript_modified = False  # True when transcript has unsaved edits
+        self._is_history_session = False  # True when session was loaded from history
+        self._loading_transcript = False  # Guard against textChanged during programmatic loads
         
         # Setup UI
         self._setup_window()
@@ -162,18 +165,18 @@ class TranscriptRecorderApp(QMainWindow):
         self.new_btn.clicked.connect(self._on_new_recording)
         app_layout.addWidget(self.new_btn)
         
+        self.load_previous_btn = QPushButton("History")
+        self.load_previous_btn.setProperty("class", "secondary-action")
+        self.load_previous_btn.setToolTip("Open a previous meeting and transcript")
+        self.load_previous_btn.clicked.connect(self._on_load_previous_meeting)
+        app_layout.addWidget(self.load_previous_btn)
+        
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.setProperty("class", "danger-outline")
         self.reset_btn.setEnabled(False)
         self.reset_btn.setToolTip("Clear the current meeting recording")
         self.reset_btn.clicked.connect(self._on_reset_recording)
         app_layout.addWidget(self.reset_btn)
-        
-        self.load_previous_btn = QPushButton("History")
-        self.load_previous_btn.setProperty("class", "secondary-action")
-        self.load_previous_btn.setToolTip("Open a previous meeting and transcript")
-        self.load_previous_btn.clicked.connect(self._on_load_previous_meeting)
-        app_layout.addWidget(self.load_previous_btn)
         
         main_layout.addWidget(app_group)
         
@@ -357,6 +360,30 @@ class TranscriptRecorderApp(QMainWindow):
             "QPushButton:hover { background: palette(mid); border-radius: 4px; }"
         )
         
+        self.edit_transcript_btn = QPushButton()
+        self.edit_transcript_btn.setIcon(
+            IconManager.get_icon("pencil", is_dark=is_dark, size=16))
+        self.edit_transcript_btn.setIconSize(QSize(16, 16))
+        self.edit_transcript_btn.setFixedSize(28, 28)
+        self.edit_transcript_btn.setToolTip("Enable transcript editing")
+        self.edit_transcript_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.edit_transcript_btn.setStyleSheet(btn_style)
+        self.edit_transcript_btn.setEnabled(False)
+        self.edit_transcript_btn.clicked.connect(self._on_edit_transcript_clicked)
+        transcript_btn_bar_layout.addWidget(self.edit_transcript_btn)
+        
+        self.save_transcript_btn = QPushButton()
+        self.save_transcript_btn.setIcon(
+            IconManager.get_icon("save", is_dark=is_dark, size=16))
+        self.save_transcript_btn.setIconSize(QSize(16, 16))
+        self.save_transcript_btn.setFixedSize(28, 28)
+        self.save_transcript_btn.setToolTip("Save transcript to disk")
+        self.save_transcript_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_transcript_btn.setStyleSheet(btn_style)
+        self.save_transcript_btn.setEnabled(False)
+        self.save_transcript_btn.clicked.connect(self._on_save_transcript_clicked)
+        transcript_btn_bar_layout.addWidget(self.save_transcript_btn)
+        
         self.copy_btn = QPushButton()
         self.copy_btn.setIcon(
             IconManager.get_icon("copy", is_dark=is_dark, size=16))
@@ -396,6 +423,9 @@ class TranscriptRecorderApp(QMainWindow):
         transcript_row.addWidget(transcript_btn_bar, alignment=Qt.AlignmentFlag.AlignTop)
         
         transcript_layout.addLayout(transcript_row)
+        
+        # Connect textChanged once; guarded by _loading_transcript and _transcript_edit_mode
+        self.transcript_text.textChanged.connect(self._on_transcript_text_changed)
         
         self.tab_widget.addTab(transcript_tab, "Meeting Transcript")
         
@@ -677,6 +707,9 @@ class TranscriptRecorderApp(QMainWindow):
                 IconManager.get_icon("save", is_dark=is_dark, size=16))
             self.open_folder_btn2.setIcon(
                 IconManager.get_icon("folder_open", is_dark=is_dark, size=16))
+            self._update_edit_button_icon()
+            self.save_transcript_btn.setIcon(
+                IconManager.get_icon("save", is_dark=is_dark, size=16))
             self.copy_btn.setIcon(
                 IconManager.get_icon("copy", is_dark=is_dark, size=16))
             self.refresh_transcript_btn.setIcon(
@@ -702,19 +735,16 @@ class TranscriptRecorderApp(QMainWindow):
         file_menu = menubar.addMenu("File")
         
         new_action = QAction("New", self)
-        new_action.setShortcut("Cmd+N")
         new_action.triggered.connect(self._on_new_recording)
         file_menu.addAction(new_action)
         
         reset_action = QAction("Reset", self)
-        reset_action.setShortcut("Cmd+R")
         reset_action.triggered.connect(self._on_reset_recording)
         file_menu.addAction(reset_action)
         
         file_menu.addSeparator()
         
         open_folder_action = QAction("Open Export Folder", self)
-        open_folder_action.setShortcut("Cmd+O")
         open_folder_action.triggered.connect(self._on_open_export_folder)
         file_menu.addAction(open_folder_action)
         
@@ -722,7 +752,6 @@ class TranscriptRecorderApp(QMainWindow):
         edit_menu = menubar.addMenu("Edit")
         
         copy_action = QAction("Copy Transcript", self)
-        copy_action.setShortcut("Cmd+C")
         copy_action.triggered.connect(self._on_copy_transcript)
         edit_menu.addAction(copy_action)
         
@@ -754,8 +783,6 @@ class TranscriptRecorderApp(QMainWindow):
         appearance_group.addAction(self.theme_dark_action)
         appearance_menu.addAction(self.theme_dark_action)
         
-        view_menu.addSeparator()
-        
         # Screen Sharing Privacy submenu
         privacy_menu = view_menu.addMenu("Screen Sharing Privacy")
         privacy_menu.setEnabled(_HAS_APPKIT)
@@ -780,16 +807,17 @@ class TranscriptRecorderApp(QMainWindow):
         
         privacy_menu.addSeparator()
         
-        privacy_default_action = QAction("Change Default…", self)
+        privacy_default_action = QAction("Change Default", self)
         privacy_default_action.triggered.connect(self._change_privacy_default)
         privacy_menu.addAction(privacy_default_action)
         
-        view_menu.addSeparator()
-        
-        log_action = QAction("Log File…", self)
-        log_action.setShortcut("Cmd+L")
+        log_action = QAction("Log File", self)
         log_action.triggered.connect(self._show_log_viewer)
         view_menu.addAction(log_action)
+        
+        # Separator keeps macOS-injected items (e.g. "Enter Full Screen")
+        # below our items so their icon column doesn't indent ours.
+        view_menu.addSeparator()
         
         # Preferences placeholder — macOS places this in the app menu automatically
         # (No longer needed since the config editor was removed)
@@ -797,15 +825,15 @@ class TranscriptRecorderApp(QMainWindow):
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
         
-        import_tools_action = QAction("Import Tools...", self)
+        import_tools_action = QAction("Import Tools", self)
         import_tools_action.triggered.connect(self._show_tool_import)
         tools_menu.addAction(import_tools_action)
         
-        edit_tool_config_action = QAction("Edit Tool Configuration...", self)
+        edit_tool_config_action = QAction("Edit Tool Configuration", self)
         edit_tool_config_action.triggered.connect(self._show_tool_json_editor)
         tools_menu.addAction(edit_tool_config_action)
         
-        edit_data_files_action = QAction("Edit Tool Data Files...", self)
+        edit_data_files_action = QAction("Edit Tool Data Files", self)
         edit_data_files_action.triggered.connect(self._show_tool_data_file_picker)
         tools_menu.addAction(edit_data_files_action)
         
@@ -822,11 +850,11 @@ class TranscriptRecorderApp(QMainWindow):
         # Rules menu
         rules_menu = menubar.addMenu("Rules")
         
-        import_rules_action = QAction("Import Rules...", self)
+        import_rules_action = QAction("Import Rules", self)
         import_rules_action.triggered.connect(self._show_rule_import)
         rules_menu.addAction(import_rules_action)
         
-        edit_rule_action = QAction("Edit Rule...", self)
+        edit_rule_action = QAction("Edit Rule", self)
         edit_rule_action.triggered.connect(self._show_rule_editor)
         rules_menu.addAction(edit_rule_action)
         
@@ -853,7 +881,7 @@ class TranscriptRecorderApp(QMainWindow):
         # Maintenance menu
         maint_menu = menubar.addMenu("Maintenance")
         
-        change_export_action = QAction("Change Export Directory…", self)
+        change_export_action = QAction("Change Export Directory", self)
         change_export_action.triggered.connect(self._change_export_directory)
         maint_menu.addAction(change_export_action)
         
@@ -876,7 +904,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         log_level_menu.addSeparator()
         
-        change_default_log_action = QAction("Change Default…", self)
+        change_default_log_action = QAction("Change Default", self)
         change_default_log_action.triggered.connect(self._change_log_level_default)
         log_level_menu.addAction(change_default_log_action)
         
@@ -900,7 +928,7 @@ class TranscriptRecorderApp(QMainWindow):
         permissions_action.triggered.connect(self._check_permissions)
         maint_menu.addAction(permissions_action)
         
-        update_action = QAction("Check for Updates...", self)
+        update_action = QAction("Check for Updates", self)
         update_action.triggered.connect(self._check_for_updates)
         maint_menu.addAction(update_action)
         
@@ -1123,6 +1151,12 @@ class TranscriptRecorderApp(QMainWindow):
             return
 
         for rule_dir in subdirs:
+            # Guard: the "manual" key is reserved for the built-in Manual Recording
+            if rule_dir.name == MANUAL_RECORDING_KEY:
+                logger.warning(f"Rules: skipping rules/{rule_dir.name}/ — "
+                               f"'{MANUAL_RECORDING_KEY}' is a reserved name")
+                continue
+
             json_path = rule_dir / "rule.json"
             if not json_path.exists():
                 logger.debug(f"Rules: no rule.json in {rule_dir.name}/ — skipped")
@@ -1305,16 +1339,18 @@ class TranscriptRecorderApp(QMainWindow):
             # Manual Recording — no recorder instance; transcript is user-editable
             self.recorder_instance = None
             self.snapshot_count = 0
+            self._loading_transcript = True
             self.transcript_text.clear()
+            self._loading_transcript = False
             self.transcript_text.setReadOnly(False)
+            self._transcript_edit_mode = True
+            self._transcript_modified = False
+            self._is_history_session = False
             self.transcript_text.setPlaceholderText(
                 "Paste or type your transcript here...\n\n"
-                "Your text is saved automatically."
+                "Click the save button to save your transcript."
             )
             self.transcript_text.setToolTip("Lines: 0")
-
-            # Connect the text-changed signal so edits are auto-saved
-            self.transcript_text.textChanged.connect(self._on_manual_transcript_changed)
 
             # Set default meeting date/time and clear other fields
             self.meeting_datetime_input.setText(timestamp.strftime("%m/%d/%Y %I:%M %p"))
@@ -1347,8 +1383,12 @@ class TranscriptRecorderApp(QMainWindow):
             
         # Update UI
         self.snapshot_count = 0
+        self._loading_transcript = True
         self.transcript_text.clear()
+        self._loading_transcript = False
         self.transcript_text.setReadOnly(True)
+        self._disable_transcript_edit_mode()
+        self._is_history_session = False
         self.transcript_text.setPlaceholderText(
             "Transcript will appear here after recording starts...\n\n"
             "To begin:\n"
@@ -1386,15 +1426,10 @@ class TranscriptRecorderApp(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
             self._on_stop_recording()
-            
-        # Tear down manual-mode state if active
-        if self._is_manual_mode:
-            try:
-                self.transcript_text.textChanged.disconnect(self._on_manual_transcript_changed)
-            except (TypeError, RuntimeError):
-                pass  # already disconnected
-            if self._manual_save_timer:
-                self._manual_save_timer.stop()
+
+        # Prompt to save unsaved transcript edits
+        if not self._check_unsaved_transcript():
+            return
 
         self.recorder_instance = None
         self.current_recording_path = None
@@ -1402,8 +1437,12 @@ class TranscriptRecorderApp(QMainWindow):
         self.merged_transcript_path = None
         self.snapshot_count = 0
         self._last_merged_line_count = 0
+        self._loading_transcript = True
         self.transcript_text.clear()
+        self._loading_transcript = False
         self.transcript_text.setReadOnly(True)
+        self._disable_transcript_edit_mode()
+        self._is_history_session = False
         self.transcript_text.setPlaceholderText(
             "Transcript will appear here after recording starts...\n\n"
             "To begin:\n"
@@ -1485,7 +1524,13 @@ class TranscriptRecorderApp(QMainWindow):
         if not self._ensure_recorder():
             logger.warning("Start recording: no active session")
             return
-        
+
+        # If transcript is in edit mode, disable it — auto capture will conflict
+        if self._transcript_edit_mode:
+            if not self._check_unsaved_transcript():
+                return
+            self._disable_transcript_edit_mode()
+
         # Switch to transcript tab
         self.tab_widget.setCurrentIndex(1)  # Meeting Transcript tab
             
@@ -1525,6 +1570,22 @@ class TranscriptRecorderApp(QMainWindow):
         
     def _on_capture_now(self):
         """Take a manual snapshot and merge into meeting transcript."""
+        # If transcript is in edit mode with unsaved changes, warn the user
+        if self._transcript_edit_mode and self._transcript_modified:
+            reply = QMessageBox.warning(
+                self, "Unsaved Transcript Changes",
+                "You have unsaved transcript edits. Capturing will overwrite "
+                "the display with the merged result.\n\n"
+                "Save your edits first, or discard them?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            if reply == QMessageBox.StandardButton.Save:
+                self._on_save_transcript_clicked()
         self._do_capture_and_merge(auto=False)
     
     def _ensure_recording_folder(self) -> bool:
@@ -1653,7 +1714,9 @@ class TranscriptRecorderApp(QMainWindow):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
+            self._loading_transcript = True
             self.transcript_text.setText(content)
+            self._loading_transcript = False
             
             # Count actual lines in the merged file and track for delta display
             actual_lines = len(content.splitlines())
@@ -1671,30 +1734,79 @@ class TranscriptRecorderApp(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to update transcript display: {e}")
             
-    # --- Manual Recording helpers ---
+    # --- Transcript editing helpers ---
 
-    def _on_manual_transcript_changed(self):
-        """Debounced auto-save for manual transcript edits.
+    def _on_transcript_text_changed(self):
+        """Track modifications when the user edits the transcript.
 
-        Starts (or restarts) a 500 ms single-shot timer so that rapid
-        typing/pasting doesn't trigger a disk write on every keystroke.
+        Connected once in ``_setup_ui``.  Ignored during programmatic loads
+        (guarded by ``_loading_transcript``) and when editing is off.
         """
-        if not self._is_manual_mode:
+        if self._loading_transcript or not self._transcript_edit_mode:
             return
 
         # Update line-count tooltip live
         line_count = len(self.transcript_text.toPlainText().splitlines())
         self.transcript_text.setToolTip(f"Lines: {line_count}")
 
-        if self._manual_save_timer is None:
-            self._manual_save_timer = QTimer(self)
-            self._manual_save_timer.setSingleShot(True)
-            self._manual_save_timer.timeout.connect(self._save_manual_transcript)
+        if not self._transcript_modified:
+            self._transcript_modified = True
+            self.save_transcript_btn.setEnabled(True)
+            logger.debug("Transcript marked as modified")
 
-        self._manual_save_timer.start(500)  # 500 ms debounce
+    def _on_edit_transcript_clicked(self):
+        """Toggle transcript edit mode on or off.
 
-    def _save_manual_transcript(self):
-        """Write the current transcript text to meeting_transcript.txt."""
+        * **Manual mode** — editing is toggled directly.
+        * **Auto-capture active** — editing is blocked (button should already
+          be disabled, but guard here as well).
+        * **Active (non-history) session without auto-capture** — prompt the
+          user to confirm the meeting is over before enabling edits, since
+          further captures would merge-conflict with manual changes.
+        * **History session** — editing is toggled directly.
+        """
+        if self._transcript_edit_mode:
+            # Toggle OFF — leave current text as-is
+            self._transcript_edit_mode = False
+            self.transcript_text.setReadOnly(True)
+            self._update_edit_button_icon()
+            self._update_button_states()
+            logger.debug("Transcript edit mode disabled")
+            return
+
+        # Guard: do not allow editing while auto-capture is running
+        if self.is_recording:
+            QMessageBox.information(
+                self, "Editing Unavailable",
+                "Cannot edit the transcript while auto capture is running.\n\n"
+                "Stop auto capture first, then enable editing."
+            )
+            return
+
+        # Non-manual, non-history active session — warn about merge conflicts
+        if not self._is_manual_mode and not self._is_history_session and self.recorder_instance is not None:
+            reply = QMessageBox.question(
+                self, "Enable Editing",
+                "Is the meeting over?\n\n"
+                "Editing the transcript while captures are still possible "
+                "could cause merge conflicts with future captures.\n\n"
+                "Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        # Enable editing
+        self._transcript_edit_mode = True
+        self.transcript_text.setReadOnly(False)
+        self._update_edit_button_icon()
+        self._update_button_states()
+        self.transcript_text.setFocus()
+        logger.debug("Transcript edit mode enabled")
+
+    def _on_save_transcript_clicked(self):
+        """Save the current transcript text to meeting_transcript.txt."""
         if not self.current_recording_path or not self.merged_transcript_path:
             return
 
@@ -1707,6 +1819,8 @@ class TranscriptRecorderApp(QMainWindow):
             self.merged_transcript_path.write_text(text, encoding="utf-8")
             line_count = len(text.splitlines())
             self._last_merged_line_count = line_count
+            self._transcript_modified = False
+            self.save_transcript_btn.setEnabled(False)
             self.copy_btn.setEnabled(bool(text.strip()))
             self.refresh_transcript_btn.setEnabled(bool(text.strip()))
             self.open_folder_btn.setEnabled(bool(text.strip()))
@@ -1714,9 +1828,54 @@ class TranscriptRecorderApp(QMainWindow):
             # Also persist meeting details if dirty
             self._save_meeting_details()
 
-            logger.debug(f"Manual transcript saved ({line_count} lines)")
+            self.statusBar().showMessage("Transcript saved")
+            logger.info(f"Transcript saved ({line_count} lines)")
         except OSError as e:
-            logger.error(f"Failed to save manual transcript: {e}")
+            logger.error(f"Failed to save transcript: {e}")
+            QMessageBox.warning(self, "Save Error", f"Failed to save transcript:\n{e}")
+
+    def _update_edit_button_icon(self):
+        """Update the edit transcript button icon based on current state."""
+        is_dark = self._is_dark_mode()
+        if self.is_recording:
+            self.edit_transcript_btn.setIcon(
+                IconManager.get_icon("pencil_off", is_dark=is_dark, size=16))
+        elif self._transcript_edit_mode:
+            self.edit_transcript_btn.setIcon(
+                IconManager.get_icon("pencil", is_dark=is_dark, tint="primary", size=16))
+        else:
+            self.edit_transcript_btn.setIcon(
+                IconManager.get_icon("pencil", is_dark=is_dark, size=16))
+
+    def _check_unsaved_transcript(self) -> bool:
+        """Prompt the user if there are unsaved transcript edits.
+
+        Returns ``True`` if it is safe to proceed (saved, discarded, or no
+        changes).  Returns ``False`` if the user chose to cancel.
+        """
+        if not self._transcript_modified:
+            return True
+
+        reply = QMessageBox.warning(
+            self, "Unsaved Transcript Changes",
+            "You have unsaved changes to the transcript.\n\n"
+            "Would you like to save before continuing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.Save:
+            self._on_save_transcript_clicked()
+        return True
+
+    def _disable_transcript_edit_mode(self):
+        """Turn off transcript editing and reset modification tracking."""
+        self._transcript_edit_mode = False
+        self._transcript_modified = False
+        self.transcript_text.setReadOnly(True)
 
     def _copy_tool_output(self):
         """Copy tool output text area contents to clipboard."""
@@ -1757,8 +1916,12 @@ class TranscriptRecorderApp(QMainWindow):
             
     def _on_refresh_transcript(self):
         """Reload the transcript from disk and update the display."""
+        if not self._check_unsaved_transcript():
+            return
         if self.merged_transcript_path and self.merged_transcript_path.exists():
             self._update_transcript_display(str(self.merged_transcript_path))
+            self._transcript_modified = False
+            self.save_transcript_btn.setEnabled(False)
             self.statusBar().showMessage("Transcript refreshed")
         else:
             self.statusBar().showMessage("No transcript file found to refresh")
@@ -1774,7 +1937,11 @@ class TranscriptRecorderApp(QMainWindow):
             subprocess.run(["open", str(self.export_base_dir)])
     
     def _on_load_previous_meeting(self):
-        """Load meeting details and transcript from a previous recording folder."""
+        """Load meeting details and transcript from a previous recording folder.
+
+        The History button is disabled while a session is active, so we don't
+        need to guard against active recordings or unsaved changes here.
+        """
         # Default to the recordings directory
         start_dir = str(self.export_base_dir / "recordings")
         if not Path(start_dir).exists():
@@ -1805,24 +1972,12 @@ class TranscriptRecorderApp(QMainWindow):
             )
             return
         
-        # If there's an active auto capture, prompt to confirm
-        if self.is_recording:
-            reply = QMessageBox.question(
-                self, "Auto Capture Running",
-                "Auto capture is currently running. Loading a previous meeting "
-                "will stop the capture and reset the current recording.\n\n"
-                "Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-            self._on_stop_recording()
-        
-        # Reset current session state
+        # Initialize session state
         self.recorder_instance = None
         self.snapshot_count = 0
         self._is_capturing = False
+        self._disable_transcript_edit_mode()
+        self._is_history_session = True
         
         # Set paths for the loaded recording
         self.current_recording_path = selected_path
@@ -1838,6 +1993,7 @@ class TranscriptRecorderApp(QMainWindow):
             self._load_meeting_details_from_file(selected_path / "meeting_details.txt")
         
         # Load transcript if it exists
+        self._loading_transcript = True
         self.transcript_text.clear()
         if has_transcript:
             try:
@@ -1850,6 +2006,7 @@ class TranscriptRecorderApp(QMainWindow):
                 self.transcript_text.setToolTip("Lines: 0")
         else:
             self.transcript_text.setToolTip("Lines: 0")
+        self._loading_transcript = False
         
         self.meeting_details_dirty = False
         
@@ -1926,6 +2083,13 @@ class TranscriptRecorderApp(QMainWindow):
 
         self.reset_btn.setEnabled(has_session)
 
+        # History: disabled during an active session — user must Reset first
+        self.load_previous_btn.setEnabled(not has_session)
+        if has_session:
+            self.load_previous_btn.setToolTip("Reset the current session before loading history")
+        else:
+            self.load_previous_btn.setToolTip("Open a previous meeting and transcript")
+
         # Capture buttons are disabled in manual mode — there is nothing to capture
         if self._is_manual_mode:
             self.capture_btn.setEnabled(False)
@@ -1936,6 +2100,25 @@ class TranscriptRecorderApp(QMainWindow):
         
         self.tab_widget.setEnabled(has_session)
         
+        # Transcript edit button: disabled when auto-capture is running or no session
+        if self.is_recording:
+            self.edit_transcript_btn.setEnabled(False)
+            self.edit_transcript_btn.setToolTip("Cannot edit while auto capture is running")
+        elif has_session:
+            self.edit_transcript_btn.setEnabled(True)
+            if self._transcript_edit_mode:
+                self.edit_transcript_btn.setToolTip("Editing enabled — click to disable")
+            else:
+                self.edit_transcript_btn.setToolTip("Enable transcript editing")
+        else:
+            self.edit_transcript_btn.setEnabled(False)
+            self.edit_transcript_btn.setToolTip("Enable transcript editing")
+        self._update_edit_button_icon()
+
+        # Transcript save button: enabled only when there are unsaved changes
+        self.save_transcript_btn.setEnabled(
+            has_session and self._transcript_modified)
+
         self.copy_btn.setEnabled(has_transcript_text)
         self.refresh_transcript_btn.setEnabled(has_transcript_text)
         self.open_folder_btn.setEnabled(has_transcript_text)
