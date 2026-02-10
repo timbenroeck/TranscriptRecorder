@@ -15,3 +15,8 @@ aiofiles==24.1.0
 
 # GUI framework (native-looking on macOS)
 PyQt6==6.7.0
+
+# Google Calendar integration (optional — app works without these)
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.0.0

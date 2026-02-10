@@ -85,6 +85,11 @@ certificate_base64.txt
 build.keychain
 build.keychain-db
 
+# Google Calendar OAuth tokens and secrets
+google/
+**/client_secret*.json
+**/token.json
+
 # Coverage reports
 htmlcov/
 .tox/

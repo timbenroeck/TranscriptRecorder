@@ -11,6 +11,7 @@ A macOS application that captures meeting transcripts and live captions using th
 - **Meeting Tools**: Run custom scripts (cleanup, summarization, etc.) against your recordings
 - **Sources & Tools**: Extensible source-based architecture — download or create your own
 - **Meeting Details**: Add meeting name, notes, and timestamps to your recordings
+- **Google Calendar** (optional): Populate meeting details from your Google Calendar
 - **Screen Sharing Privacy**: Hide the app window from screen sharing and recordings
 - **Auto-Updates**: Check for and install updates directly from the app
 
@@ -265,6 +266,51 @@ For long-running tools (e.g. AI/LLM calls via Cortex), set `"streaming": true` t
 
 If no output is received for `idle_warning_seconds`, the status bar shows a warning. After `idle_kill_seconds` the tool is auto-cancelled.
 
+## Google Calendar Integration (Optional)
+
+Transcript Recorder can optionally integrate with Google Calendar to populate meeting details (date/time, name, attendees, description) from your calendar events. When configured, a calendar button appears in the Meeting Details button bar — click it to browse events and select one to fill in the meeting fields. Events are pre-fetched in the background on launch so the dialog opens instantly.
+
+### Features
+
+- **Background pre-fetch**: Events are fetched automatically on launch (if previously signed in), so the calendar dialog opens without network delay
+- **Event picker dialog**: Shows events with time and name, a clickable date header with calendar date picker, "Last refreshed" status, refresh button, and filter toggles for all-day / declined events
+- **Date picker**: Click the date in the dialog header to open a calendar widget and browse events for any day. When opened from a history session, the dialog defaults to that meeting's date
+- **Filter conference info**: A toggle at the bottom of the dialog controls whether Zoom/Teams/WebEx boilerplate is stripped from the meeting notes — disable it if the filtering is removing information you want to keep
+- **Smart overwrite**: Only prompts to overwrite when meaningful meeting details (name or notes) already exist; skips the prompt if only the date/time is populated
+- **Attendee list**: Extracts attendee names and emails from the calendar event for inclusion in meeting notes
+- **Clean descriptions**: Strips conferencing boilerplate (join links, meeting IDs, passcodes, phone dial-in blocks) from the event body by default
+
+### Setup
+
+1. **Obtain a Google OAuth client secret**:
+   - Create a project at [Google Cloud Console](https://console.cloud.google.com/)
+   - Enable the **Google Calendar API**
+   - Create an **OAuth 2.0 Client ID** (Desktop application type)
+   - Download the `client_secret.json` file
+   - Alternatively, use a client secret file provided by your administrator
+
+2. **Configure in the app**:
+   - Go to **Integrations > Google Calendar > Configuration**
+   - Check **Enable Google Calendar integration**
+   - Browse to your `client_secret.json` file
+   - Click **Save** — the file is automatically copied to application storage so you can delete the original
+
+3. **Sign in**: The first time you click the calendar button, a browser window will open for Google sign-in. After granting permission, the token is saved locally and subsequent uses will not require re-authentication.
+
+> The Google API libraries are bundled with the app. If running from source, install them with `pip install google-auth google-auth-oauthlib google-api-python-client`.
+
+### Usage
+
+1. Click the **calendar button** in the Meeting Details button bar — the events dialog opens instantly with pre-fetched events
+2. Browse events (toggle "Show all-day events" or "Show declined" to see more)
+3. Click the **date** in the dialog header to open the date picker and view events for a different day
+4. Select an event and click **Select** (or double-click) to populate the meeting details
+   - If meaningful meeting details (name or notes) already exist, you are prompted to confirm overwrite
+5. Use the **refresh** button in the dialog header to re-fetch events from Google
+6. Toggle **Filter conference info** at the bottom to include or exclude Zoom/Teams/WebEx join links and boilerplate from the notes
+
+> The calendar integration is entirely optional. The source dropdown remains enabled regardless of calendar configuration, so ad-hoc meetings can always be transcribed normally. The calendar menu is under **Integrations > Google Calendar**.
+
 ## Configuration
 
 The application configuration is stored at `~/Library/Application Support/TranscriptRecorder/config.json`. On first launch, a default config is copied from the app bundle.
@@ -279,6 +325,10 @@ The application configuration is stored at `~/Library/Application Support/Transc
   "client_settings": {
     "export_directory": "",
     "default_source": ""
+  },
+  "google_calendar": {
+    "enabled": false,
+    "client_secret_path": ""
   }
 }
 ```
@@ -290,8 +340,10 @@ The application configuration is stored at `~/Library/Application Support/Transc
 | `logging.log_file_name` | Log filename inside the `.logs` directory |
 | `client_settings.export_directory` | Where recordings, sources, and tools are stored |
 | `client_settings.default_source` | Source key selected on startup (e.g. `zoom`, `manual`) |
+| `google_calendar.enabled` | Enable/disable the Google Calendar integration |
+| `google_calendar.client_secret_path` | Path to your Google OAuth `client_secret.json` file |
 
-You can change the log level from **Maintenance → Log Level** without editing the file. Use **Maintenance → Change Export Directory...** to move your export location.
+You can change the log level from **Maintenance → Log Level** without editing the file. Use **Maintenance → Change Export Directory...** to move your export location. Use **Calendar → Setup Google Calendar** to set up Google Calendar integration.
 
 ## Menu Reference
 
@@ -338,6 +390,13 @@ You can change the log level from **Maintenance → Log Level** without editing 
 | **Clear Default** | Remove the default source setting (falls back to Manual Recording) |
 | **Open Sources Folder** | Open the sources directory in Finder |
 | **Refresh Sources** | Rescan the sources directory for new or updated sources |
+
+### Calendar
+
+| Menu Item | Description |
+|-----------|-------------|
+| **Setup Google Calendar** | Set up Google Calendar integration (client secret path, enable/disable) |
+| **Sign Out** | Remove the stored Google OAuth token to sign out |
 
 ### Maintenance
 
@@ -415,6 +474,15 @@ python gui_app.py
 ```bash
 # Local source build (uses SourceBuild bundle ID to avoid permission conflicts)
 ./scripts/build_local.sh
+
+# Build, auto-sign, and auto-launch (no prompts)
+./scripts/build_local.sh --sign
+
+# Build with interactive launch loop (re-launch without rebuilding)
+./scripts/build_local.sh --loop
+
+# Build, auto-sign, auto-launch, and keep the launch loop open
+./scripts/build_local.sh --sign --loop
 
 # Full clean rebuild
 ./scripts/full_rebuild_local.sh

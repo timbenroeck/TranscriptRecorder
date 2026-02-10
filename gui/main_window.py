@@ -3,6 +3,7 @@ Main application window for Transcript Recorder.
 """
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSize
 from PyQt6.QtGui import QAction, QActionGroup, QFont, QIcon, QPalette, QColor
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -40,12 +41,35 @@ from gui.styles import get_application_stylesheet
 from gui.icons import IconManager
 from gui.workers import (
     RecordingWorker, ToolRunnerWorker, StreamingToolRunnerWorker,
-    UpdateCheckWorker, ToolFetchWorker,
+    UpdateCheckWorker, ToolFetchWorker, CalendarFetchWorker,
     STREAM_PARSERS, _stream_parser_raw,
 )
 from gui.dialogs import LogViewerDialog, PermissionsDialog, ThemedMessageDialog, WelcomeDialog
 from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
 from gui.data_editors import DataFileEditorDialog
+from gui.calendar_integration import (
+    _HAS_GOOGLE, CalendarConfig, calendar_config_from_dict,
+    filter_events,
+)
+
+
+class DropDownComboBox(QComboBox):
+    """QComboBox that always opens its popup below the widget.
+
+    The default QComboBox on macOS positions the popup so the currently
+    selected item aligns with the widget, which causes a "drop-up" effect
+    when items near the end of the list are selected.  This subclass
+    overrides ``showPopup`` to anchor the popup's top edge to the widget's
+    bottom edge so the list always drops *down*.
+    """
+
+    def showPopup(self) -> None:
+        super().showPopup()
+        popup = self.view().parent()
+        if popup is not None:
+            # Anchor the popup top-left to the combo box bottom-left
+            below = self.mapToGlobal(QPoint(0, self.height()))
+            popup.move(below)
 
 
 class TranscriptRecorderApp(QMainWindow):
@@ -92,6 +116,13 @@ class TranscriptRecorderApp(QMainWindow):
         self._transcript_modified = False  # True when transcript has unsaved edits
         self._is_history_session = False  # True when session was loaded from history
         self._loading_transcript = False  # Guard against textChanged during programmatic loads
+        self._calendar_config: Optional[CalendarConfig] = None  # Google Calendar config
+        self._calendar_worker: Optional[CalendarFetchWorker] = None  # Background fetch thread
+        self._calendar_raw_events: list = []  # Cached raw events from last fetch
+        self._calendar_last_refreshed: Optional[str] = None  # ISO timestamp of last fetch
+        self._calendar_date_iso: Optional[str] = None  # ISO date of last fetch
+        self._calendar_events_dialog: Optional[QDialog] = None  # Open events dialog ref
+        self._calendar_fetch_silent: bool = False  # True when auto-fetching on launch
         
         # Setup UI
         self._setup_window()
@@ -158,7 +189,9 @@ class TranscriptRecorderApp(QMainWindow):
         app_layout.setContentsMargins(0, 0, 0, 0)
         app_layout.setSpacing(8)
         
-        self.app_combo = QComboBox()
+        is_dark = self._is_dark_mode()
+
+        self.app_combo = DropDownComboBox()
         self.app_combo.setMinimumWidth(120)
         self.app_combo.currentIndexChanged.connect(self._on_app_changed)
         app_layout.addWidget(self.app_combo, stretch=1)
@@ -320,7 +353,21 @@ class TranscriptRecorderApp(QMainWindow):
         self.open_folder_btn2.setEnabled(False)
         self.open_folder_btn2.clicked.connect(self._on_open_folder)
         details_btn_bar_layout.addWidget(self.open_folder_btn2)
-        
+
+        # Calendar button — visible when Google Calendar is configured
+        self.calendar_btn = QPushButton()
+        self.calendar_btn.setObjectName("calendar_btn")
+        self.calendar_btn.setIcon(
+            IconManager.get_icon("calendar", is_dark=is_dark, size=16))
+        self.calendar_btn.setIconSize(QSize(16, 16))
+        self.calendar_btn.setFixedSize(28, 28)
+        self.calendar_btn.setToolTip("Load meeting details from Google Calendar")
+        self.calendar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.calendar_btn.setStyleSheet(btn_style)
+        self.calendar_btn.setVisible(False)
+        self.calendar_btn.clicked.connect(self._on_calendar_clicked)
+        details_btn_bar_layout.addWidget(self.calendar_btn)
+
         details_notes_row.addWidget(details_btn_bar, alignment=Qt.AlignmentFlag.AlignTop)
         
         details_layout.addLayout(details_notes_row)
@@ -442,7 +489,7 @@ class TranscriptRecorderApp(QMainWindow):
         
         # Tool selection row
         tool_select_layout = QHBoxLayout()
-        self.tool_combo = QComboBox()
+        self.tool_combo = DropDownComboBox()
         self.tool_combo.setMinimumWidth(200)
         self.tool_combo.addItem("Select a tool...", None)
         self.tool_combo.currentIndexChanged.connect(self._on_tool_changed)
@@ -706,6 +753,8 @@ class TranscriptRecorderApp(QMainWindow):
                 IconManager.get_icon("arrow_up", is_dark=is_dark, size=20))
             self.time_down_btn.setIcon(
                 IconManager.get_icon("arrow_down", is_dark=is_dark, size=20))
+            self.calendar_btn.setIcon(
+                IconManager.get_icon("calendar", is_dark=is_dark, size=16))
             compact_icon = "chevrons_down" if self._compact_mode else "chevrons_up"
             self.compact_btn.setIcon(
                 IconManager.get_icon(compact_icon, is_dark=is_dark, size=16))
@@ -893,6 +942,23 @@ class TranscriptRecorderApp(QMainWindow):
         refresh_sources_action.triggered.connect(self._scan_sources)
         sources_menu.addAction(refresh_sources_action)
         
+        # Integrations menu
+        integrations_menu = menubar.addMenu("Integrations")
+
+        # Google Calendar submenu
+        google_cal_menu = integrations_menu.addMenu("Google Calendar")
+
+        calendar_configure_action = QAction("Configuration", self)
+        calendar_configure_action.setMenuRole(QAction.MenuRole.NoRole)
+        calendar_configure_action.triggered.connect(self._on_calendar_configure)
+        google_cal_menu.addAction(calendar_configure_action)
+
+        self._calendar_sign_out_action = QAction("Sign Out", self)
+        self._calendar_sign_out_action.setMenuRole(QAction.MenuRole.NoRole)
+        self._calendar_sign_out_action.triggered.connect(self._on_calendar_sign_out)
+        self._calendar_sign_out_action.setVisible(False)
+        google_cal_menu.addAction(self._calendar_sign_out_action)
+        
         # Maintenance menu
         maint_menu = menubar.addMenu("Maintenance")
         
@@ -1040,6 +1106,9 @@ class TranscriptRecorderApp(QMainWindow):
             # Scan for sources and tools
             self._scan_sources()
             self._scan_tools()
+            
+            # Load Google Calendar integration config
+            self._load_calendar_config()
             
             log_level = self.config.get("logging", {}).get("level", "INFO")
             file_sources = len(self._discovered_sources) - 1  # subtract built-in Manual Recording
@@ -2916,7 +2985,396 @@ class TranscriptRecorderApp(QMainWindow):
         """Handle save details button click."""
         self._save_meeting_details(force=True)
         self.statusBar().showMessage("Meeting details saved")
-        
+    
+    # ------------------------------------------------------------------
+    # Google Calendar integration
+    # ------------------------------------------------------------------
+
+    def _load_calendar_config(self):
+        """Load Google Calendar settings from config and update UI visibility.
+
+        If the integration is ready and a token already exists (i.e. the
+        user has previously authorised), kick off a background fetch so
+        events are pre-loaded when the user first clicks the calendar icon.
+        """
+        if not self.config:
+            return
+        raw = self.config.get("google_calendar", {})
+        token_dir = APP_SUPPORT_DIR / "google"
+        self._calendar_config = calendar_config_from_dict(raw, token_dir)
+        self._calendar_last_refreshed = raw.get("last_refreshed")
+        self._update_calendar_button_visibility()
+        if self._calendar_config.is_ready():
+            logger.info("Calendar: integration enabled and ready")
+            # Auto-fetch on launch only when a token exists (avoids opening
+            # a browser window before the user asks for it).
+            if self._calendar_config.has_token():
+                self._start_calendar_fetch(silent=True)
+        else:
+            logger.debug("Calendar: integration not configured or packages missing")
+
+    def _update_calendar_button_visibility(self):
+        """Show/hide the calendar button and Sign Out action based on config state."""
+        visible = (
+            self._calendar_config is not None
+            and self._calendar_config.is_ready()
+        )
+        self.calendar_btn.setVisible(visible)
+        # Sign Out is only visible when a token file exists
+        has_token = (
+            self._calendar_config is not None
+            and self._calendar_config.has_token()
+        )
+        self._calendar_sign_out_action.setVisible(has_token)
+
+    # ------------------------------------------------------------------
+    # Calendar fetch helpers
+    # ------------------------------------------------------------------
+
+    def _start_calendar_fetch(
+        self,
+        *,
+        silent: bool = False,
+        target_date_iso: Optional[str] = None,
+    ):
+        """Kick off a background fetch for calendar events.
+
+        Parameters
+        ----------
+        silent:
+            If True, don't update status bar and don't auto-open the
+            events dialog when events arrive (used for auto-fetch on launch).
+        target_date_iso:
+            ISO date string (``YYYY-MM-DD``).  If ``None``, fetches today.
+        """
+        if self._calendar_worker and self._calendar_worker.isRunning():
+            return  # already fetching
+
+        self._calendar_fetch_silent = silent
+
+        if not silent:
+            self.statusBar().showMessage("Fetching calendar events...")
+            self.calendar_btn.setEnabled(False)
+
+        self._calendar_worker = CalendarFetchWorker(
+            self._calendar_config,
+            target_date_iso=target_date_iso,
+            parent=self,
+        )
+        self._calendar_worker.raw_events_ready.connect(self._on_calendar_raw_events_ready)
+        self._calendar_worker.auth_required.connect(self._on_calendar_auth_required)
+        self._calendar_worker.error.connect(self._on_calendar_error)
+        self._calendar_worker.start()
+
+    def _on_calendar_clicked(self):
+        """Handle click on the calendar icon — open the events dialog.
+
+        If we already have cached events, open the dialog immediately.
+        Otherwise, fetch first and open once ready.
+        """
+        if not self._calendar_config or not self._calendar_config.is_ready():
+            ThemedMessageDialog.info(
+                self, "Calendar Not Configured",
+                "Google Calendar integration is not configured.\n\n"
+                "Use Integrations > Google Calendar > Configuration to set it up."
+            )
+            return
+
+        if self._calendar_raw_events:
+            # We have cached events — show the dialog straight away
+            self._show_calendar_events_dialog()
+        else:
+            # No cached events yet — trigger a fetch; open dialog when ready
+            self._start_calendar_fetch()
+
+    def _on_calendar_auth_required(self):
+        """OAuth browser is about to open — notify the user."""
+        self.statusBar().showMessage("Opening browser for Google sign-in...")
+
+    def _on_calendar_raw_events_ready(self, raw_events: list, timestamp: str, date_iso: str):
+        """Handle raw events arriving from background fetch."""
+        self.calendar_btn.setEnabled(True)
+        self._calendar_raw_events = raw_events
+        self._calendar_last_refreshed = timestamp
+        self._calendar_date_iso = date_iso
+        was_silent = getattr(self, '_calendar_fetch_silent', False)
+
+        # Persist the last_refreshed timestamp in config
+        self._save_calendar_last_refreshed(timestamp)
+
+        # Auth succeeded — a token now exists, so show Sign Out
+        if self._calendar_config and self._calendar_config.has_token():
+            self._calendar_sign_out_action.setVisible(True)
+
+        # Apply default filters for the status message
+        filtered = filter_events(raw_events)
+        self.statusBar().showMessage(
+            f"Found {len(filtered)} calendar event(s)" if filtered
+            else "No calendar events for this day"
+        )
+
+        # If the events dialog is open, push the refresh into it
+        if (self._calendar_events_dialog is not None
+                and self._calendar_events_dialog.isVisible()):
+            self._calendar_events_dialog.update_events(raw_events, timestamp, date_iso)
+        elif not was_silent:
+            # Fetch was triggered by a button click — open the dialog now
+            self._show_calendar_events_dialog()
+
+    def _on_calendar_error(self, message: str):
+        """Handle calendar fetch failure."""
+        self.calendar_btn.setEnabled(True)
+        self.statusBar().showMessage(f"Calendar error: {message}")
+        logger.error(f"Calendar: fetch error: {message}")
+        if (self._calendar_events_dialog is not None
+                and self._calendar_events_dialog.isVisible()):
+            self._calendar_events_dialog.set_refreshing(False)
+
+    def _save_calendar_last_refreshed(self, timestamp: str):
+        """Persist the last_refreshed timestamp into config.json."""
+        try:
+            if self.config is None:
+                return
+            if "google_calendar" not in self.config:
+                self.config["google_calendar"] = {}
+            self.config["google_calendar"]["last_refreshed"] = timestamp
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as exc:
+            logger.warning(f"Calendar: failed to save last_refreshed: {exc}")
+
+    def _calendar_default_date_and_time(self):
+        """Derive the default date and optional hint time for the calendar dialog.
+
+        Uses the date/time from the meeting date/time textbox when available,
+        otherwise falls back to the date of the last fetch, or today.
+
+        Returns ``(date, Optional[time])``.
+        """
+        import datetime as _dt
+
+        # 1. Try the meeting date/time textbox
+        dt_text = self.meeting_datetime_input.text().strip()
+        if dt_text:
+            for fmt in ("%m/%d/%Y %I:%M %p", "%m/%d/%Y", "%Y-%m-%d"):
+                try:
+                    parsed = _dt.datetime.strptime(dt_text, fmt)
+                    hint_time = parsed.time() if "%I" in fmt or "%H" in fmt else None
+                    return parsed.date(), hint_time
+                except ValueError:
+                    continue
+
+        # 2. Fall back to the date of the last fetch
+        date_iso = getattr(self, '_calendar_date_iso', None)
+        if date_iso:
+            try:
+                return _dt.date.fromisoformat(date_iso), None
+            except (ValueError, TypeError):
+                pass
+
+        # 3. Today
+        return _dt.date.today(), None
+
+    def _show_calendar_events_dialog(self):
+        """Open (or re-focus) the calendar events picker dialog."""
+        from gui.calendar_dialogs import CalendarEventsDialog
+        import datetime as _dt
+
+        is_dark = self._is_dark_mode()
+        target_date, hint_time = self._calendar_default_date_and_time()
+
+        # If the cached events are for a different date, clear them and
+        # trigger a fetch for the correct date.
+        cached_date_iso = getattr(self, '_calendar_date_iso', None)
+        if cached_date_iso:
+            try:
+                cached_date = _dt.date.fromisoformat(cached_date_iso)
+            except (ValueError, TypeError):
+                cached_date = None
+        else:
+            cached_date = None
+
+        raw_events = self._calendar_raw_events
+        if cached_date != target_date:
+            # Events are stale for the target date — show empty and fetch
+            raw_events = []
+
+        dlg = CalendarEventsDialog(
+            raw_events=raw_events,
+            last_refreshed=self._calendar_last_refreshed,
+            target_date=target_date,
+            hint_time=hint_time,
+            is_dark=is_dark,
+            parent=self,
+        )
+        self._calendar_events_dialog = dlg
+        dlg.refresh_requested.connect(self._on_calendar_dialog_refresh)
+
+        # If we opened with an empty list (different date), kick off a fetch
+        if not raw_events:
+            dlg.set_refreshing(True)
+            self._start_calendar_fetch(
+                silent=True, target_date_iso=target_date.isoformat(),
+            )
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            event_data = dlg.selected_event_data()
+            if event_data:
+                self._on_calendar_event_selected(event_data)
+
+        self._calendar_events_dialog = None
+
+    def _on_calendar_dialog_refresh(self, target_date_iso: str):
+        """Handle refresh / date-change inside the events dialog."""
+        if self._calendar_events_dialog is not None:
+            self._calendar_events_dialog.set_refreshing(True)
+        self._start_calendar_fetch(
+            silent=True, target_date_iso=target_date_iso,
+        )
+
+    def _has_meaningful_meeting_details(self) -> bool:
+        """Return True if the meeting details have real content beyond the
+        auto-populated date/time (i.e. a name or notes have been entered)."""
+        name = self.meeting_name_input.text().strip()
+        notes = self.meeting_notes_input.toPlainText().strip()
+        return bool(name or notes)
+
+    def _on_calendar_event_selected(self, event_data: dict):
+        """Populate meeting details from a calendar event.
+
+        - If meaningful meeting details already exist, prompts to overwrite.
+        - Does NOT auto-start a new recording session or change the source.
+        """
+        # Only prompt if the user has entered real data (name or notes)
+        if self._has_meaningful_meeting_details():
+            if not ThemedMessageDialog.question(
+                self, "Overwrite Meeting Details",
+                "Meeting details already contain data.\n\n"
+                "Do you want to overwrite with the selected calendar event?"
+            ):
+                return
+
+        # --- Populate meeting details ---
+        # Date/Time
+        dt_str = event_data.get("datetime_str", "")
+        if dt_str:
+            self.meeting_datetime_input.setText(dt_str)
+
+        # Meeting Name
+        name = event_data.get("name", "")
+        if name:
+            self.meeting_name_input.setText(name)
+
+        # Notes
+        notes = event_data.get("notes", "")
+        self.meeting_notes_input.setPlainText(notes)
+
+        self.meeting_details_dirty = True
+
+        self._set_status(f"Loaded: {name}", "info")
+        logger.info(f"Calendar: populated meeting details from '{name}'")
+
+    def _on_calendar_configure(self):
+        """Show the Google Calendar configuration dialog."""
+        from gui.calendar_dialogs import CalendarConfigDialog
+
+        current = self.config.get("google_calendar", {})
+        dlg = CalendarConfigDialog(current, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_settings = dlg.get_settings()
+
+            # Copy client_secret to App Support so the user can delete
+            # the original from Downloads (or wherever they picked it).
+            src_path = new_settings.get("client_secret_path", "")
+            if src_path and Path(src_path).is_file():
+                google_dir = APP_SUPPORT_DIR / "google"
+                google_dir.mkdir(parents=True, exist_ok=True)
+                dest_path = google_dir / "client_secret.json"
+                # Only copy if the source is not already inside App Support
+                if not str(Path(src_path).resolve()).startswith(
+                    str(APP_SUPPORT_DIR.resolve())
+                ):
+                    try:
+                        shutil.copy2(src_path, dest_path)
+                        new_settings["client_secret_path"] = str(dest_path)
+                        logger.info(
+                            f"Calendar: copied client secret to {dest_path}"
+                        )
+                    except OSError as e:
+                        logger.warning(
+                            f"Calendar: could not copy client secret: {e}"
+                        )
+                        # Fall back to keeping the original path
+                else:
+                    # Already in App Support — just normalise the path
+                    new_settings["client_secret_path"] = str(dest_path)
+
+            # Persist to config
+            try:
+                with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                config_data["google_calendar"] = new_settings
+                with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, indent=2)
+                self.config = config_data
+                self._load_calendar_config()
+
+                # Give the user clear feedback about what happened
+                from gui.calendar_integration import _HAS_GOOGLE
+                if new_settings.get("enabled") and not _HAS_GOOGLE:
+                    self._set_status(
+                        "Settings saved — Google API libraries not available "
+                        "(calendar will not work until a build includes them)",
+                        "warn",
+                    )
+                elif new_settings.get("enabled"):
+                    self._set_status(
+                        "Google Calendar enabled — use the calendar button "
+                        "in Meeting Details to load events",
+                        "info",
+                    )
+                else:
+                    self._set_status("Google Calendar disabled", "")
+
+                logger.info("Calendar: configuration updated")
+            except Exception as e:
+                logger.error(f"Calendar: failed to save config: {e}")
+                ThemedMessageDialog.critical(
+                    self, "Error", f"Failed to save calendar settings: {e}"
+                )
+
+    def _on_calendar_sign_out(self):
+        """Delete the stored OAuth token to sign out of Google."""
+        if not self._calendar_config or not self._calendar_config.has_token():
+            ThemedMessageDialog.info(
+                self, "Not Signed In",
+                "No Google Calendar token found — you are not currently signed in."
+            )
+            return
+
+        if not ThemedMessageDialog.question(
+            self, "Sign Out",
+            "This will remove your Google Calendar sign-in token. "
+            "You will need to sign in again next time you use the calendar. "
+            "Continue?"
+        ):
+            return
+
+        try:
+            os.remove(self._calendar_config.token_path)
+            self._calendar_sign_out_action.setVisible(False)
+            # Clear cached events so the user must sign in again
+            self._calendar_raw_events = []
+            self._calendar_last_refreshed = None
+            self._calendar_date_iso = None
+            self.statusBar().showMessage("Signed out of Google Calendar")
+            logger.info("Calendar: token deleted — signed out")
+        except Exception as e:
+            logger.error(f"Calendar: failed to delete token: {e}")
+            ThemedMessageDialog.critical(
+                self, "Error", f"Failed to delete token: {e}"
+            )
+
     def _set_status(self, text: str, state: str = ""):
         """Update the status bar message with an optional visual state.
 

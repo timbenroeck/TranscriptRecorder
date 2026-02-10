@@ -143,6 +143,8 @@ OPTIONS = {
             'gui.source_editor',
             'gui.versioning',
             'gui.main_window',
+            'gui.calendar_integration',
+            'gui.calendar_dialogs',
             # --- PyQt6: only the 4 modules actually imported ---
             'PyQt6.QtCore',
             'PyQt6.QtGui',
@@ -168,11 +170,25 @@ OPTIONS = {
             'os',
             'signal',
             'threading',
+            # --- Google Calendar integration ---
+            'google.auth',
+            'google.auth.transport',
+            'google.auth.transport.requests',
+            'google.oauth2',
+            'google.oauth2.credentials',
+            'google_auth_oauthlib',
+            'google_auth_oauthlib.flow',
+            'googleapiclient',
+            'googleapiclient.discovery',
         ],
         'packages': [
             'psutil',
             'aiofiles',
             'gui',
+            # cryptography has a native Rust .so extension; must be a
+            # full package so py2app keeps the .so alongside its Python
+            # code instead of splitting them between the zip and lib-dynload.
+            'cryptography',
         ],
         'excludes': [
             # --- Build / packaging tools ---
@@ -222,7 +238,7 @@ OPTIONS = {
             'PyQt6.QtSpatialAudio',
             # --- Unused standard library modules ---
             'test',
-            'unittest',
+            # Note: unittest is needed by google-auth at runtime
             'pydoc',
             'doctest',
             'idlelib',

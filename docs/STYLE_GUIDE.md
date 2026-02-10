@@ -273,6 +273,12 @@ Tabs use a minimal underline style instead of pill backgrounds.
 
 The combo box arrow is rendered as a Retina-quality PNG via `IconManager.render_to_file()` and referenced in QSS with `image: url(...)`.
 
+### Popup Positioning (`DropDownComboBox`)
+
+The main window uses a `DropDownComboBox` subclass (defined in `gui/main_window.py`) instead of a plain `QComboBox`. On macOS, Qt's default combo box popup aligns the currently selected item with the widget, which causes a "drop-up" effect when items near the end of the list are selected. `DropDownComboBox` overrides `showPopup()` to anchor the popup's top edge to the widget's bottom edge so the list always drops **down**.
+
+Use `DropDownComboBox` for any combo box in the main window where consistent downward popup placement is desired.
+
 ---
 
 ## 7. Status Bar
@@ -312,6 +318,8 @@ All icons are Lucide SVGs stored in the `_SVG_SOURCES` dictionary in `gui/icons.
 | `save` | Floppy disk | Save meeting details |
 | `folder_open` | Open folder | Open meeting folder |
 | `refresh` | Circular arrows | Reload transcript |
+| `calendar` | Calendar page | Calendar toolbar button |
+| `calendar_sync` | Calendar with sync arrows | Calendar events dialog refresh button |
 | `search` | Magnifying glass | Accessibility Inspector filter fields |
 | `scan_eye` | Scanning eye in viewfinder | Accessibility Inspector window |
 

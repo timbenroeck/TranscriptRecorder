@@ -746,3 +746,65 @@ class SourceFetchWorker(QThread):
             dest = local_dir / file_name
             with open(dest, "wb") as f:
                 f.write(content)
+
+
+class CalendarFetchWorker(QThread):
+    """Background worker that authenticates with Google and fetches events.
+
+    Runs the OAuth2 flow and Calendar API calls off the main thread so
+    the UI stays responsive.
+
+    Parameters
+    ----------
+    calendar_config:
+        A :class:`CalendarConfig` instance.
+    target_date_iso:
+        ISO-format date string (``YYYY-MM-DD``).  If ``None``, fetches
+        today's events.
+
+    Signals
+    -------
+    raw_events_ready : list, str, str
+        Emitted with (raw_events, fetch_timestamp_iso, target_date_iso).
+    auth_required : (no args)
+        Emitted just before the OAuth browser window opens.
+    error : str
+        Emitted when authentication or fetching fails.
+    """
+
+    # (raw_events_list, fetch_timestamp_iso, target_date_iso)
+    raw_events_ready = pyqtSignal(list, str, str)
+    auth_required = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, calendar_config, *, target_date_iso: Optional[str] = None, parent=None):
+        super().__init__(parent)
+        self._config = calendar_config
+        self._target_date_iso = target_date_iso
+
+    def run(self):
+        import datetime as _dt
+        from gui.calendar_integration import (
+            authenticate,
+            fetch_events_for_date,
+        )
+
+        try:
+            # Notify UI that auth may open a browser
+            if not self._config.has_token():
+                self.auth_required.emit()
+
+            creds = authenticate(self._config)
+
+            target_date = None
+            if self._target_date_iso:
+                target_date = _dt.date.fromisoformat(self._target_date_iso)
+
+            raw_events = fetch_events_for_date(creds, target_date)
+            timestamp = _dt.datetime.now().astimezone().isoformat()
+            date_iso = (target_date or _dt.date.today()).isoformat()
+
+            self.raw_events_ready.emit(raw_events, timestamp, date_iso)
+        except Exception as exc:
+            logger.error(f"CalendarFetchWorker: {exc}")
+            self.error.emit(str(exc))
