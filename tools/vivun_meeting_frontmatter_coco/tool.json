@@ -1,0 +1,41 @@
+{
+  "display_name": "Vivun Meeting Frontmatter",
+  "description": "Match Obsidian meeting notes to Vivun/CRM SE activity records and enrich YAML frontmatter with account metadata. Queries Snowflake for SE activities, matches by meeting name and date, and auto-updates high-confidence matches.",
+  "script": "vivun_meeting_frontmatter_coco.sh",
+  "streaming": true,
+  "stream_parser": "cortex_json",
+  "idle_warning_seconds": 300,
+  "idle_kill_seconds": 600,
+  "parameters": [
+    {
+      "flag": "-b",
+      "label": "Meetings Base Directory",
+      "default": "/Users/tbenroeck/Documents/obsidian_vaults/snowflake/Meetings",
+      "required": true
+    },
+    {
+      "flag": "-d",
+      "label": "Target Month/Year",
+      "builtin": "meeting_date_year_month",
+      "required": true
+    },
+    {
+      "flag": "-s",
+      "label": "Activity SE Name",
+      "default": "Tim Benroeck",
+      "required": true
+    },
+    {
+      "flag": "-w",
+      "label": "Snowflake Warehouse",
+      "default": "",
+      "required": false
+    },
+    {
+      "flag": "-c",
+      "label": "Cortex Connection",
+      "default": "",
+      "required": false
+    }
+  ]
+}
