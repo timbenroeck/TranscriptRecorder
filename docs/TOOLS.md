@@ -109,7 +109,9 @@ Parameters appear in an **editable table** in the app. Values pre-filled from `b
 
 ### Built-in Parameter Values
 
-Parameters with a `"builtin"` key are automatically resolved at run-time from the app's current state:
+Parameters with a `"builtin"` key are automatically resolved at run-time from the app's current state. Some builtins require an active recording session; others are always available.
+
+#### Session Builtins (require a loaded recording)
 
 | `builtin` value | Resolves to |
 |-----------------|-------------|
@@ -118,6 +120,72 @@ Parameters with a `"builtin"` key are automatically resolved at run-time from th
 | `meeting_details` | Full path to `meeting_details.txt` in the recording folder |
 | `export_directory` | Base export directory (e.g. `~/Documents/transcriptrecorder`) |
 | `app_name` | Key of the selected meeting application (e.g. `zoom`, `teams`) |
+
+#### Meeting Date Builtins (parsed from the Date/Time field)
+
+These are derived from the **Date/Time** field in the Meeting Details panel. They are available whenever the field contains a parseable date.
+
+| `builtin` value | Format | Example |
+|-----------------|--------|---------|
+| `meeting_date` | `yyyy-mm-dd` | `2026-02-11` |
+| `meeting_date_year_month` | `yyyy-mm` | `2026-02` |
+| `meeting_date_year` | `yyyy` | `2026` |
+| `meeting_date_month` | `mm` | `02` |
+| `meeting_date_month_name` | Full month name | `February` |
+| `meeting_date_month_short` | 3-character abbreviation | `Feb` |
+
+#### Meeting Details Builtins (from GUI fields)
+
+| `builtin` value | Resolves to |
+|-----------------|-------------|
+| `meeting_name` | Text from the **Meeting Name** field |
+| `meeting_datetime` | Raw text from the **Date/Time** field (as displayed in the GUI) |
+
+#### Current Date Builtins (always available)
+
+These use the system clock at the moment the tool parameters are populated — no recording required.
+
+| `builtin` value | Format | Example |
+|-----------------|--------|---------|
+| `current_date` | `yyyy-mm-dd` | `2026-02-11` |
+| `current_date_year_month` | `yyyy-mm` | `2026-02` |
+| `current_date_year` | `yyyy` | `2026` |
+| `current_date_month` | `mm` | `02` |
+| `current_date_month_name` | Full month name | `February` |
+| `current_date_month_short` | 3-character abbreviation | `Feb` |
+
+#### System Builtins (always available)
+
+| `builtin` value | Resolves to |
+|-----------------|-------------|
+| `home_directory` | User's home directory (e.g. `/Users/tbenroeck`) |
+| `user_name` | System username (e.g. `tbenroeck`) |
+| `tools_directory` | Base tools directory (e.g. `~/Documents/transcriptrecorder/tools`) |
+| `tool_directory` | The selected tool's own sub-folder |
+
+#### Environment Variable Builtins (`env:`)
+
+Use the `env:` prefix to resolve a parameter from an environment variable. This lets tool authors reference user-specific configuration without hardcoding values or requiring app changes.
+
+**Syntax:** `"builtin": "env:VARIABLE_NAME"`
+
+```json
+{
+  "flag": "-w",
+  "label": "Snowflake Warehouse",
+  "builtin": "env:SNOWFLAKE_WAREHOUSE",
+  "default": "MY_WAREHOUSE"
+}
+```
+
+If the environment variable is set, its value is used. If it is not set, the `default` value is used as a fallback (same behavior as other builtins).
+
+Common use cases:
+- `env:USER` — system username
+- `env:SNOWFLAKE_WAREHOUSE` — Snowflake warehouse from shell profile
+- `env:CORTEX_CONNECTION` — default Cortex connection name
+- `env:OBSIDIAN_VAULT` — user's Obsidian vault path
+- Any custom variable exported in the user's shell profile
 
 ### Data Files
 
@@ -407,16 +475,19 @@ Transcript Recorder includes a pre-built **Summarize Meeting** tool that generat
 
 ### Output
 
-The tool creates two files organized by meeting date:
+The tool creates a markdown summary organized by meeting date, and may also create or update attendee CRM notes:
 
 ```
-~/Documents/obsidian_vault/Meetings/
-└── 2025/
-    └── 05-May/
-        ├── 2025-05-27 Edwards Pre-Call Prep.md       # Markdown summary
-        └── .transcripts/
-            └── 2025-05-27 Edwards Pre-Call Prep.txt   # Merged transcript
+~/Documents/obsidian_vault/
+├── Meetings/
+│   └── 2025/
+│       └── 05-May/
+│           └── 2025-05-27 Edwards Pre-Call Prep.md       # Markdown summary
+└── CRM/
+    └── Joseph Cramer (joseph.cramer@snowflake.com).md    # Attendee CRM note
 ```
+
+**CRM Notes:** When personal or relationship details are shared during a meeting (e.g., family, vacations, hobbies), the skill creates or updates lightweight notes in the `CRM/` folder at the vault root. These serve as a quick-reference cheat sheet before your next conversation with that person. Notes are only created when personal information is actually shared — not for every attendee. The person specified by First Name / Last Name is excluded.
 
 ### Customizing Defaults
 
