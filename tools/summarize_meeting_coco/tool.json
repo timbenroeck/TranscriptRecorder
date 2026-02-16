@@ -16,7 +16,7 @@
     {
       "flag": "-o",
       "label": "Output Directory",
-      "default": "/Users/tbenroeck/Documents/obsidian_vaults/snowflake/Meetings",
+      "default": "~/Documents/obsidian_vaults/work/Meetings",
       "required": true
     },
     {
@@ -34,7 +34,7 @@
     {
       "flag": "-c",
       "label": "Cortex Connection",
-      "default": "Snowhouse",
+      "default": "",
       "required": false
     }
   ],

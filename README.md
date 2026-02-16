@@ -189,6 +189,7 @@ tools/
   "description": "First-pass cleanup of meeting transcripts.",
   "script": "clean_transcript.py",
   "streaming": false,
+  "refresh_on_complete": ["meeting_transcript"],
   "parameters": [
     {
       "flag": "-t",
@@ -220,6 +221,7 @@ tools/
 | `idle_warning_seconds` | No | `30` | Seconds of no output before showing a warning |
 | `idle_kill_seconds` | No | `120` | Seconds of no output before auto-cancelling |
 | `data_files` | No | `[]` | Editable data files with in-app editors |
+| `refresh_on_complete` | No | `[]` | UI elements to reload after success: `"meeting_transcript"`, `"meeting_details"` |
 
 #### Built-in Parameter Values
 

@@ -107,8 +107,8 @@ class ToolRunnerWorker(QThread):
             logger.debug(f"ToolRunnerWorker._get_user_env: resolving PATH via "
                          f"interactive login shell: {shell}")
             result = subprocess.run(
-                [shell, "-l", "-i", "-c", f'echo "{marker}$PATH{marker}"'],
-                capture_output=True, text=True, timeout=10,
+                [shell, "-l", "-i", "-c", f'echo "{marker}${{PATH}}{marker}"'],
+                capture_output=True, text=True, timeout=15,
             )
             if result.returncode == 0:
                 stdout = result.stdout
@@ -129,7 +129,7 @@ class ToolRunnerWorker(QThread):
                 logger.warning(f"ToolRunnerWorker._get_user_env: login shell returned "
                                f"rc={result.returncode}")
         except subprocess.TimeoutExpired:
-            logger.warning("ToolRunnerWorker._get_user_env: login shell timed out after 10s")
+            logger.warning("ToolRunnerWorker._get_user_env: login shell timed out after 15s")
         except Exception as exc:
             logger.warning(f"ToolRunnerWorker._get_user_env: failed to resolve user PATH: {exc}")
         return env

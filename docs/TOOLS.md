@@ -15,6 +15,7 @@ This guide covers everything you need to create, configure, and troubleshoot too
   - [Parameter Fields](#parameter-fields)
   - [Built-in Parameter Values](#built-in-parameter-values)
   - [Data Files](#data-files)
+  - [Refresh on Complete](#refresh-on-complete)
   - [Streaming Fields](#streaming-fields)
 - [Script Execution](#script-execution)
   - [Interpreter Selection](#interpreter-selection)
@@ -87,6 +88,7 @@ You can include any other supporting files in the sub-folder (config files, skil
 | `stream_parser` | string | No | `"raw"` | Which built-in parser to use for streaming output |
 | `idle_warning_seconds` | int | No | `30` | Seconds of no output before showing a warning in the status bar |
 | `idle_kill_seconds` | int | No | `120` | Seconds of no output before auto-cancelling the tool |
+| `refresh_on_complete` | array | No | `[]` | UI elements to reload from disk after the tool finishes successfully (see [Refresh on Complete](#refresh-on-complete)) |
 
 ### Parameter Fields
 
@@ -236,6 +238,32 @@ With this configuration, when the user selects **Clean Transcript** in the Meeti
 ```
 
 Clicking **Edit** opens a datagrid editor where users can add, modify, and delete entries. For the `key_array_grid` editor, the datagrid shows the key (correct term) in the first column and the array values as a comma-separated string in the second column. Both columns are editable inline.
+
+### Refresh on Complete
+
+Tools can request that the app reload specific UI elements from disk after a successful run (exit code 0). This is useful for tools that modify files in the recording directory — for example, a transcript cleanup tool that overwrites `meeting_transcript.txt` can have the cleaned version automatically appear in the Transcript tab.
+
+Add a `"refresh_on_complete"` array to the top level of `tool.json`:
+
+```json
+{
+  "display_name": "Clean Transcript",
+  "script": "clean_transcript.py",
+  "refresh_on_complete": ["meeting_transcript"],
+  "parameters": [ ... ]
+}
+```
+
+#### Supported Targets
+
+| Target | What it reloads |
+|--------|-----------------|
+| `"meeting_transcript"` | Reloads `meeting_transcript.txt` from disk into the Transcript tab. Clears any unsaved in-memory edits. |
+| `"meeting_details"` | Reloads `meeting_details.txt` from disk into the Meeting Details fields (name, date/time, notes). |
+
+Multiple targets can be specified: `"refresh_on_complete": ["meeting_transcript", "meeting_details"]`.
+
+The refresh only runs on success (exit code 0). If the tool is cancelled or fails, the UI is left unchanged. The status bar will indicate which elements were refreshed (e.g. "Tool completed: Clean Transcript — refreshed transcript").
 
 ### Streaming Fields
 
@@ -514,6 +542,8 @@ Defaults are pre-filled in the Parameters table but can be edited per-run.
 Transcript Recorder includes a **Clean Transcript** tool that performs a first-pass cleanup of `meeting_transcript.txt` files. It removes common transcription artifacts to produce a cleaner transcript for summarization or review.
 
 By default, the original file is backed up to a `.backup/` folder in the recording directory, and the cleaned output overwrites the original `meeting_transcript.txt`. This ensures downstream tools (e.g. Summarize Meeting) work seamlessly with the cleaned transcript without needing to know a different filename.
+
+The tool uses `refresh_on_complete` to automatically reload the cleaned transcript into the Transcript tab after a successful run, so the changes are immediately visible in the UI.
 
 ### What It Cleans
 

@@ -5,6 +5,7 @@
   "streaming": false,
   "idle_warning_seconds": 150,
   "idle_kill_seconds": 300,
+  "refresh_on_complete": ["meeting_transcript"],
   "parameters": [
     {
       "flag": "-t",
@@ -15,7 +16,7 @@
     {
       "flag": "-c",
       "label": "Corrections File",
-      "default": "",
+      "default": "data/corrections.json",
       "required": false
     },
     {

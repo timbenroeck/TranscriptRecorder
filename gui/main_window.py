@@ -3048,10 +3048,60 @@ class TranscriptRecorderApp(QMainWindow):
         elif exit_code == 0:
             self.statusBar().showMessage(f"Tool completed: {display_name} ({elapsed_str})")
             logger.info(f"Tools: '{display_name}' completed in {elapsed_str} (exit code 0)")
+            self._apply_tool_refresh(tool_key)
         else:
             self.statusBar().showMessage(f"Tool failed: {display_name} (exit code {exit_code}, {elapsed_str})")
             logger.warning(f"Tools: '{display_name}' failed (exit code {exit_code}) after {elapsed_str}")
     
+    def _apply_tool_refresh(self, tool_key: str):
+        """Reload UI elements specified by a tool's ``refresh_on_complete`` list.
+
+        Called after a tool exits successfully (exit code 0).  Recognised
+        refresh targets:
+
+        - ``"meeting_transcript"`` — reload ``meeting_transcript.txt`` into
+          the Transcript tab.
+        - ``"meeting_details"`` — reload ``meeting_details.txt`` into the
+          Meeting Details fields.
+        """
+        tool_def = self._discovered_tools.get(tool_key, {})
+        refresh_targets = tool_def.get("refresh_on_complete", [])
+        if not refresh_targets:
+            return
+
+        refreshed: list[str] = []
+
+        for target in refresh_targets:
+            if target == "meeting_transcript":
+                if (self.merged_transcript_path
+                        and self.merged_transcript_path.exists()):
+                    self._update_transcript_display(
+                        str(self.merged_transcript_path))
+                    self._transcript_modified = False
+                    self.save_transcript_btn.setEnabled(False)
+                    refreshed.append("transcript")
+                    logger.info("Tools: refreshed meeting transcript from disk")
+            elif target == "meeting_details":
+                if self.current_recording_path:
+                    details_path = (
+                        self.current_recording_path / "meeting_details.txt"
+                    )
+                    if details_path.exists():
+                        self._load_meeting_details_from_file(details_path)
+                        self.meeting_details_dirty = False
+                        refreshed.append("meeting details")
+                        logger.info(
+                            "Tools: refreshed meeting details from disk")
+            else:
+                logger.warning(
+                    f"Tools: unknown refresh_on_complete target: {target!r}")
+
+        if refreshed:
+            label = " & ".join(refreshed)
+            display_name = tool_def.get("display_name", tool_key)
+            self.statusBar().showMessage(
+                f"Tool completed: {display_name} — refreshed {label}")
+
     def _on_save_details_clicked(self):
         """Handle save details button click."""
         self._save_meeting_details(force=True)
@@ -3352,6 +3402,11 @@ class TranscriptRecorderApp(QMainWindow):
                 logger.info(f"Calendar: saved event.json to {event_json_path}")
             except Exception as e:
                 logger.error(f"Calendar: failed to save event.json: {e}")
+
+        # Persist meeting details and rename the recording folder to match
+        # the calendar event's date/time (otherwise the rename only happens
+        # on the next capture cycle or manual transcript save).
+        self._save_meeting_details()
 
         self._set_status(f"Loaded: {name}", "info")
         logger.info(f"Calendar: populated meeting details from '{name}'")
