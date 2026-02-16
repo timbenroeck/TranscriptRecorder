@@ -56,13 +56,31 @@ echo "Python version: $(python --version)"
 echo "Python path: $(which python)"
 echo ""
 
-# --- Source build flag ---
-# This produces "Transcript Recorder SourceBuild.app" with a distinct bundle
-# identifier so macOS accessibility permissions don't collide with the
+# --- Build type selection ---
+# SourceBuild produces "Transcript Recorder SourceBuild.app" with a distinct
+# bundle identifier so macOS accessibility permissions don't collide with the
 # installed release version in /Applications.
-export SOURCE_BUILD=1
-APP_NAME="Transcript Recorder SourceBuild"
-echo "Building as: $APP_NAME (source build)"
+# Release mirrors the GitHub CI pipeline and produces a signed DMG.
+echo "Select build type:"
+echo "  1) SourceBuild  — local dev, separate accessibility permissions"
+echo "  2) Release      — mirrors GitHub CI, produces signed DMG"
+echo ""
+read -p "Choice [1/2]: " BUILD_TYPE_CHOICE
+
+case "$BUILD_TYPE_CHOICE" in
+    2)
+        export SOURCE_BUILD=0
+        APP_NAME="Transcript Recorder"
+        IS_RELEASE=true
+        echo "Building as: $APP_NAME (release)"
+        ;;
+    *)
+        export SOURCE_BUILD=1
+        APP_NAME="Transcript Recorder SourceBuild"
+        IS_RELEASE=false
+        echo "Building as: $APP_NAME (source build)"
+        ;;
+esac
 echo ""
 
 # --- Step 3: Install dependencies (mirrors GitHub Action) ---
@@ -94,23 +112,91 @@ fi
 # --- Step 6: Code Sign ---
 echo ""
 echo "=== Step 6: Code Signing ==="
-read -p "Would you like to code sign the app? (y/n): " SIGN_CHOICE
-if [[ "$SIGN_CHOICE" =~ ^[Yy]$ ]]; then
+if [ "$IS_RELEASE" = true ]; then
+    # Release builds must be signed for DMG/notarization
+    echo "Release build — code signing is required."
     "$SCRIPT_DIR/sign_app.sh" "dist/$APP_NAME.app"
 else
-    echo "Skipping code signing."
+    read -p "Would you like to code sign the app? (y/n): " SIGN_CHOICE
+    if [[ "$SIGN_CHOICE" =~ ^[Yy]$ ]]; then
+        "$SCRIPT_DIR/sign_app.sh" "dist/$APP_NAME.app"
+    else
+        echo "Skipping code signing."
+    fi
 fi
 
-# --- Step 7: Launch prompt ---
-echo ""
-echo "=== Build Complete ==="
-echo ""
-read -p "Would you like to launch the app now? (y/n): " LAUNCH_CHOICE
-if [[ "$LAUNCH_CHOICE" =~ ^[Yy]$ ]]; then
-    echo "Launching $APP_NAME..."
-    open "dist/$APP_NAME.app"
+# --- Release-only: DMG creation, signing, and notarization ---
+if [ "$IS_RELEASE" = true ]; then
+
+    # --- Step 7: Create DMG (mirrors build-release.yml) ---
+    VERSION=$(python -c "from version import __version__; print(__version__)")
+    DMG_NAME="TranscriptRecorder-${VERSION}.dmg"
+
+    echo ""
+    echo "=== Step 7: Creating DMG ==="
+    rm -rf dmg_contents
+    mkdir -p dmg_contents
+    cp -R "dist/$APP_NAME.app" dmg_contents/
+    ln -s /Applications dmg_contents/Applications
+
+    hdiutil create -volname "$APP_NAME" \
+        -srcfolder dmg_contents \
+        -ov -format UDZO \
+        "dist/$DMG_NAME"
+
+    rm -rf dmg_contents
+    echo "  Created: dist/$DMG_NAME"
+
+    # --- Step 8: Sign DMG ---
+    IDENTITY="Developer ID Application: Tim Benroeck (Q6YV5V6UR9)"
+
+    echo ""
+    echo "=== Step 8: Signing DMG ==="
+    codesign --force --timestamp \
+        --sign "$IDENTITY" "dist/$DMG_NAME"
+
+    codesign --verify --verbose=2 "dist/$DMG_NAME"
+    echo "  DMG signed successfully"
+
+    # --- Step 9: Notarize ---
+    echo ""
+    echo "=== Step 9: Notarization ==="
+    read -p "Would you like to notarize the DMG? (y/n): " NOTARIZE_CHOICE
+    if [[ "$NOTARIZE_CHOICE" =~ ^[Yy]$ ]]; then
+        "$SCRIPT_DIR/notarize_app.sh" "dist/$DMG_NAME"
+    else
+        echo "Skipping notarization."
+        echo ""
+        echo "You can notarize later with:"
+        echo "  scripts/notarize_app.sh \"dist/$DMG_NAME\""
+    fi
+
+    # --- Done (release) ---
+    echo ""
+    echo "=== Release Build Complete ==="
+    echo ""
+    echo "Artifacts:"
+    echo "  App: dist/$APP_NAME.app"
+    echo "  DMG: dist/$DMG_NAME"
+    echo ""
+    echo "To test the DMG:"
+    echo "  open \"dist/$DMG_NAME\""
+    echo ""
+
 else
-    echo "Skipping launch. You can open it later with:"
-    echo "  open \"dist/$APP_NAME.app\""
+
+    # --- Step 7: Launch prompt (SourceBuild only) ---
+    echo ""
+    echo "=== Build Complete ==="
+    echo ""
+    read -p "Would you like to launch the app now? (y/n): " LAUNCH_CHOICE
+    if [[ "$LAUNCH_CHOICE" =~ ^[Yy]$ ]]; then
+        echo "Launching $APP_NAME..."
+        open "dist/$APP_NAME.app"
+    else
+        echo "Skipping launch. You can open it later with:"
+        echo "  open \"dist/$APP_NAME.app\""
+    fi
+    echo ""
+
 fi
-echo ""

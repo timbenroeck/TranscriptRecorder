@@ -110,17 +110,24 @@ jobs:
               --entitlements "$ENTITLEMENTS" \
               --sign "$SIGNING_IDENTITY" {} \;
 
-          # Sign all embedded frameworks
-          echo "Signing frameworks..."
-          if [ -d "$APP_PATH/Contents/Frameworks" ]; then
-              for framework in "$APP_PATH"/Contents/Frameworks/*.framework; do
-                  if [ -d "$framework" ]; then
-                      codesign --force --options runtime --timestamp \
-                          --entitlements "$ENTITLEMENTS" \
-                          --sign "$SIGNING_IDENTITY" "$framework"
-                  fi
-              done
-          fi
+          # Sign all frameworks (recursive — py2app places Qt6 frameworks in Resources/lib/)
+          # Qt6 frameworks from pip wheels have non-standard bundle structure, so we
+          # must sign the inner binaries explicitly before signing .framework dirs.
+          echo "Signing framework binaries..."
+          find "$APP_PATH" -path "*.framework/Versions/*/[A-Z]*" -type f -perm +111 ! -name "*.plist" ! -path "*/_CodeSignature/*" | while IFS= read -r fw_bin; do
+              echo "  Signing $(basename "$fw_bin")..."
+              codesign --force --options runtime --timestamp \
+                  --entitlements "$ENTITLEMENTS" \
+                  --sign "$SIGNING_IDENTITY" "$fw_bin"
+          done
+          echo "Signing framework bundles..."
+          find "$APP_PATH" -name "*.framework" -type d | while IFS= read -r framework; do
+              case "$framework" in */Versions/*|*/_CodeSignature/*) continue ;; esac
+              echo "  Signing $(basename "$framework")..."
+              codesign --force --options runtime --timestamp \
+                  --entitlements "$ENTITLEMENTS" \
+                  --sign "$SIGNING_IDENTITY" "$framework"
+          done
 
           # Sign all executables in MacOS/
           echo "Signing executables in Contents/MacOS/..."
@@ -176,6 +183,31 @@ jobs:
               --sign "$SIGNING_IDENTITY" "$DMG_PATH"
 
           codesign --verify --verbose=2 "$DMG_PATH"
+
+      # =============================================================
+      # NOTARIZATION: Submit to Apple and staple the ticket
+      # =============================================================
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG_PATH="dist/TranscriptRecorder-${{ steps.version.outputs.version }}.dmg"
+
+          echo "Submitting for notarization..."
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
+
+          echo "Stapling notarization ticket to DMG..."
+          xcrun stapler staple "$DMG_PATH"
+
+          echo "Verifying notarization..."
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
 
       # =============================================================
       # CLEANUP: Remove the temporary keychain

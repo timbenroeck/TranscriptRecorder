@@ -307,6 +307,60 @@ if len(sys.argv) > 1 and sys.argv[1] == 'py2app':
     _app_dir = _dist_dir / f'{APP_NAME}.app'
     _resources = _app_dir / 'Contents' / 'Resources'
 
+    # ------------------------------------------------------------------
+    # Pre-cleanup: extract native extensions from the Python zip
+    # ------------------------------------------------------------------
+    # py2app sometimes packs .so/.dylib files inside python3XX.zip.
+    # Native extensions cannot be code-signed inside a zip, which causes
+    # Apple notarization to reject the app.  Extract them to the
+    # corresponding site-packages directory so codesign can reach them.
+    import zipfile as _zipfile
+
+    _lib_dir_res = _resources / 'lib'
+    _native_exts = ('.so', '.dylib')
+    for _zip_path in sorted(_lib_dir_res.glob('python*.zip')):
+        # Determine the matching lib directory (e.g. python3.13/)
+        # python313.zip → python3.13
+        _zip_stem = _zip_path.stem  # "python313"
+        _ver_digits = _zip_stem.replace('python', '')  # "313"
+        if len(_ver_digits) >= 2:
+            _ver_dotted = f"python{_ver_digits[0]}.{_ver_digits[1:]}"
+        else:
+            _ver_dotted = f"python{_ver_digits}"
+        _extract_base = _lib_dir_res / _ver_dotted
+
+        _extracted = []
+        with _zipfile.ZipFile(_zip_path, 'r') as _zf:
+            for _member in _zf.namelist():
+                if any(_member.endswith(ext) for ext in _native_exts):
+                    _extracted.append(_member)
+
+        if _extracted:
+            # Extract the native files to the lib directory
+            with _zipfile.ZipFile(_zip_path, 'r') as _zf:
+                for _member in _extracted:
+                    _dest = _extract_base / _member
+                    _dest.parent.mkdir(parents=True, exist_ok=True)
+                    _dest.write_bytes(_zf.read(_member))
+                    # Ensure __init__.py exists for each parent package
+                    _pkg = _dest.parent
+                    while _pkg != _extract_base:
+                        _init = _pkg / '__init__.py'
+                        if not _init.exists():
+                            _init.write_text('')
+                        _pkg = _pkg.parent
+                    print(f"  Extracted from zip: {_member}")
+
+            # Rewrite the zip without the native extensions
+            _tmp_zip = _zip_path.with_suffix('.tmp')
+            with _zipfile.ZipFile(_zip_path, 'r') as _zf_in, \
+                 _zipfile.ZipFile(_tmp_zip, 'w', _zipfile.ZIP_DEFLATED) as _zf_out:
+                for _item in _zf_in.infolist():
+                    if _item.filename not in _extracted:
+                        _zf_out.writestr(_item, _zf_in.read(_item.filename))
+            _tmp_zip.replace(_zip_path)
+            print(f"  Rewrote {_zip_path.name} without {len(_extracted)} native extension(s)")
+
     removed_count = 0
 
     # ------------------------------------------------------------------

@@ -55,20 +55,32 @@ find "$APP_PATH" -name "*.dylib" -exec \
     --sign "$IDENTITY" {} \;
 echo "  Signed $DYLIB_COUNT .dylib files"
 
-# --- Step 3: Sign all embedded frameworks ---
-echo "Signing embedded frameworks..."
-if [ -d "$APP_PATH/Contents/Frameworks" ]; then
-    for framework in "$APP_PATH"/Contents/Frameworks/*.framework; do
-        if [ -d "$framework" ]; then
-            echo "  Signing $(basename "$framework")..."
-            codesign --force --options runtime --timestamp \
-                --entitlements "$ENTITLEMENTS" \
-                --sign "$IDENTITY" "$framework"
-        fi
-    done
-else
-    echo "  No Frameworks directory found (OK for some builds)"
-fi
+# --- Step 3: Sign all embedded frameworks (recursive) ---
+# py2app places Qt6 frameworks in Resources/lib/ rather than Contents/Frameworks/.
+# These frameworks from pip wheels have a non-standard bundle structure (no
+# Current symlink, no top-level Info.plist), so codesigning the .framework
+# directory alone does NOT sign the binary inside Versions/A/.  We must sign
+# the inner executables explicitly, then sign each .framework directory.
+echo "Signing framework binaries..."
+FW_BIN_COUNT=0
+find "$APP_PATH" -path "*.framework/Versions/*/[A-Z]*" -type f -perm +111 ! -name "*.plist" ! -path "*/_CodeSignature/*" | while IFS= read -r fw_bin; do
+    echo "  Signing $(echo "$fw_bin" | sed "s|.*\.framework/|...|")..."
+    codesign --force --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$IDENTITY" "$fw_bin"
+    FW_BIN_COUNT=$((FW_BIN_COUNT + 1))
+done
+echo "Signing framework bundles..."
+FW_COUNT=0
+while IFS= read -r framework; do
+    case "$framework" in */Versions/*|*/_CodeSignature/*) continue ;; esac
+    echo "  Signing $(basename "$framework")..."
+    codesign --force --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$IDENTITY" "$framework"
+    FW_COUNT=$((FW_COUNT + 1))
+done < <(find "$APP_PATH" -name "*.framework" -type d | awk '{print length, $0}' | sort -rn | cut -d' ' -f2-)
+echo "  Signed $FW_COUNT framework bundles"
 
 # --- Step 4: Sign all executables in MacOS/ ---
 echo "Signing executables in Contents/MacOS/..."

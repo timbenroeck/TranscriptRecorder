@@ -27,29 +27,9 @@ A macOS application that captures meeting transcripts and live captions using th
 
 1. Download the latest `.dmg` file from [Releases](../../releases)
 2. Open the DMG and drag "Transcript Recorder" to your Applications folder
-3. Follow the steps below to allow the unsigned app and grant required permissions
+3. Launch the app and grant Accessibility permissions if needed (see below)
 
-#### Allowing the Unsigned App
-
-Since Transcript Recorder is not signed with an Apple Developer certificate, macOS will block it on first launch. Follow these steps to allow it:
-
-**Step 1: Dismiss the blocked app warning**
-
-When you first open the app, macOS will display a warning that it cannot verify the developer. Click **Done** to dismiss the dialog.
-
-![Blocked app warning](images/1_blocked_app.png)
-
-**Step 2: Allow the app in System Settings**
-
-Open **System Settings → Privacy & Security**. Scroll down to the Security section where you will see a message about "Transcript Recorder" being blocked. Click **Open Anyway**.
-
-![Allow blocked app in System Settings](images/2_allow_blocked_app.png)
-
-**Step 3: Confirm opening the app**
-
-A confirmation dialog will appear. Click **Open Anyway** to launch the app.
-
-![Confirm open dialog](images/3_confirm_open.png)
+> Releases are code-signed and notarized with Apple, so macOS will not block the app on launch.
 
 #### Granting Accessibility Permissions
 
@@ -483,6 +463,7 @@ The `scripts/` folder contains maintenance and migration utilities:
 | `migrate_attendees_split.py` | One-time migration to convert the old combined `"[[Name]] (email)"` attendee format into the split `attendees` + `attendee_emails` format. |
 | `migrate_recordings.py` | Migrate old-format recordings into the `YYYY/MM` directory structure |
 | `batch_clean_and_summarize.sh` | Walk a directory tree, find recording folders, and run tools on each. Supports per-tool flags (`--clean`, `--summarize`, `--tag`, `--all`), `--dry-run`, `--force`, `--min-bytes`, and vivun tagger options (`--tag-date`, `--tag-se-name`). Defaults to `--clean --summarize` when no tool flags are given. |
+| `changelog-commit.py` | Commit helper for the Cursor changelog. Lists pending change entries, lets you commit them individually or in groups, and tracks committed entries with their git hashes. Run with no args to see pending changes, `commit` to interactively select entries, `log` to see committed history, or `show <id>` for full details. |
 
 ```bash
 # Preview what the calendar backfill would do
@@ -511,9 +492,36 @@ The `scripts/` folder contains maintenance and migration utilities:
 # Build, auto-sign, auto-launch, and keep the launch loop open
 ./scripts/build_local.sh --sign --loop
 
-# Full clean rebuild
+# Full clean rebuild (prompts for SourceBuild or Release)
 ./scripts/full_rebuild_local.sh
+
+# Quick release rebuild (reuses existing .venv from full_rebuild_local.sh)
+./scripts/build_release_local.sh
 ```
+
+#### Build Types
+
+`full_rebuild_local.sh` prompts you to choose a build type:
+
+| Type | What it produces | When to use |
+|------|-----------------|-------------|
+| **SourceBuild** | `Transcript Recorder SourceBuild.app` with a separate bundle ID | Day-to-day development — won't conflict with your installed release copy |
+| **Release** | Signed `.app` + signed `.dmg` with optional notarization | Validating the full release pipeline locally before pushing a tag |
+
+The **Release** build mirrors the GitHub Actions workflow exactly: build, sign .app, create DMG, sign DMG, and optionally notarize via Apple's notary service.
+
+#### Notarization Prerequisites
+
+To notarize locally, store your Apple credentials in the Keychain once:
+
+```bash
+xcrun notarytool store-credentials "TranscriptRecorder" \
+  --apple-id "your-apple-id@example.com" \
+  --team-id "YOUR_TEAM_ID" \
+  --password "<app-specific-password>"
+```
+
+Generate an app-specific password at [appleid.apple.com](https://appleid.apple.com) under Sign-In and Security.
 
 ### Bundle Manifest
 
