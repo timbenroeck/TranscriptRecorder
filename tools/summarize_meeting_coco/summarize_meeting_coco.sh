@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Default values
 MEETING_DIR=""

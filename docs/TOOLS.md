@@ -257,10 +257,13 @@ The app selects an interpreter based on the script's file extension:
 
 | Extension | Interpreter |
 |-----------|-------------|
-| `.sh`, `.bash` | `/bin/bash` |
+| `.sh` | The user's default shell (`$SHELL`, typically `/bin/zsh` on macOS) |
+| `.bash` | `/bin/bash` |
 | `.zsh` | `/bin/zsh` |
 | `.py` | The Python interpreter running the app (`sys.executable`) |
 | Other | Executed directly (the script's execute bit must be set) |
+
+> **Note:** Since macOS Catalina (2019), the default shell is zsh. Using `.sh` with the user's default shell ensures that tools like `cortex` and other CLIs installed via the user's shell profile are available.
 
 ### Working Directory
 
@@ -268,7 +271,7 @@ The script's working directory (`cwd`) is set to the **tool's own sub-folder** �
 
 ### Environment
 
-On macOS, GUI applications inherit a minimal system PATH that often lacks user-specific directories (e.g. `~/.local/bin`, Homebrew paths). The tool runner resolves the user's full login-shell PATH before spawning the script, so tools like `cortex`, `python3`, and other user-installed CLIs are available without requiring full paths.
+On macOS, GUI applications inherit a minimal system PATH that often lacks user-specific directories (e.g. `~/.local/bin`, Homebrew paths). The tool runner resolves the user's full PATH by spawning an interactive login shell (`-l -i`) before running the script. This sources both `~/.zprofile` (login config) and `~/.zshrc` (interactive config), so tools like `cortex`, `python3`, and other user-installed CLIs are available without requiring full paths. Unique output markers are used to reliably extract the PATH even when shell frameworks (oh-my-zsh, starship, etc.) produce extra output during initialization.
 
 The child process is spawned with:
 - `stdin` closed (`/dev/null`) — prevents tools from hanging waiting for input
@@ -347,7 +350,7 @@ These timeouts protect against tools that hang after completing their work (a kn
 2. **Write your script** (e.g. `my_tool.sh`):
 
    ```bash
-   #!/bin/bash
+   #!/bin/zsh
    # my_tool.sh — example tool that processes a meeting recording
 
    MEETING_DIR=""
@@ -402,7 +405,7 @@ A tool with no parameters that just prints info about the recording:
 ```
 
 ```bash
-#!/bin/bash
+#!/bin/zsh
 # info.sh — shows recording stats
 echo "=== Recording Info ==="
 wc -l "$1"/meeting_transcript.txt 2>/dev/null || echo "No transcript found."
@@ -595,6 +598,7 @@ The tool handles all transcript formats produced by Transcript Recorder:
 
 ### Cortex works in terminal but not from the app
 
-- The app resolves your login shell's PATH, but some environment variables may differ. Check the log for PATH resolution warnings.
+- The app resolves your shell's full PATH by spawning an interactive login shell. Check the log for PATH resolution warnings (search for `_get_user_env`).
+- If you have PATH modifications in `~/.zshrc` or `~/.zprofile`, they should be picked up automatically. If you use a custom shell config that only runs in certain conditions, the app may not capture those paths.
 - Verify your Snowflake connection config is accessible from the app's environment.
 - Try running the exact command shown in the output area's "command:" line from your terminal to reproduce.

@@ -2836,8 +2836,9 @@ class TranscriptRecorderApp(QMainWindow):
                 self.tool_output_area.setPlainText(f"Error: script not found: {script_path}")
             return None
         
+        user_shell = os.environ.get("SHELL", "/bin/zsh")
         interpreters = {
-            ".sh": "/bin/bash", ".bash": "/bin/bash",
+            ".sh": user_shell, ".bash": "/bin/bash",
             ".zsh": "/bin/zsh",
             ".py": sys.executable,
         }

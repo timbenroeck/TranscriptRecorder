@@ -91,25 +91,45 @@ class ToolRunnerWorker(QThread):
         
         GUI applications on macOS inherit a minimal system PATH that often
         lacks user-specific directories (e.g. ``~/.local/bin``).  This method
-        spawns a one-shot login shell to capture the real PATH and merges it
-        into the current process environment.
+        spawns a one-shot interactive login shell to capture the real PATH and
+        merges it into the current process environment.
+        
+        Both ``-l`` (login) and ``-i`` (interactive) flags are used so that
+        all config files are sourced — ``~/.zprofile`` *and* ``~/.zshrc`` (or
+        their bash equivalents).  Unique markers bracket the PATH output so
+        that any noise from shell frameworks (oh-my-zsh, starship, etc.) is
+        safely ignored.
         """
         env = os.environ.copy()
         try:
             shell = os.environ.get("SHELL", "/bin/zsh")
-            logger.debug(f"ToolRunnerWorker._get_user_env: resolving PATH via login shell: {shell}")
+            marker = "__TR_PATH_MARKER__"
+            logger.debug(f"ToolRunnerWorker._get_user_env: resolving PATH via "
+                         f"interactive login shell: {shell}")
             result = subprocess.run(
-                [shell, "-l", "-c", "echo $PATH"],
-                capture_output=True, text=True, timeout=5,
+                [shell, "-l", "-i", "-c", f'echo "{marker}$PATH{marker}"'],
+                capture_output=True, text=True, timeout=10,
             )
-            if result.returncode == 0 and result.stdout.strip():
-                env["PATH"] = result.stdout.strip()
-                logger.debug(f"ToolRunnerWorker._get_user_env: resolved PATH ({len(env['PATH'])} chars)")
+            if result.returncode == 0:
+                stdout = result.stdout
+                start = stdout.find(marker)
+                end = stdout.find(marker, start + len(marker)) if start != -1 else -1
+                if start != -1 and end != -1:
+                    path_value = stdout[start + len(marker):end].strip()
+                    if path_value:
+                        env["PATH"] = path_value
+                        logger.debug(f"ToolRunnerWorker._get_user_env: resolved PATH "
+                                     f"({len(path_value)} chars)")
+                    else:
+                        logger.warning("ToolRunnerWorker._get_user_env: extracted PATH is empty")
+                else:
+                    logger.warning(f"ToolRunnerWorker._get_user_env: markers not found in "
+                                   f"shell output ({len(stdout)} chars)")
             else:
                 logger.warning(f"ToolRunnerWorker._get_user_env: login shell returned "
-                               f"rc={result.returncode}, stdout empty={not result.stdout.strip()}")
+                               f"rc={result.returncode}")
         except subprocess.TimeoutExpired:
-            logger.warning("ToolRunnerWorker._get_user_env: login shell timed out after 5s")
+            logger.warning("ToolRunnerWorker._get_user_env: login shell timed out after 10s")
         except Exception as exc:
             logger.warning(f"ToolRunnerWorker._get_user_env: failed to resolve user PATH: {exc}")
         return env
