@@ -16,7 +16,7 @@
     {
       "flag": "-o",
       "label": "Output Directory",
-      "default": "~/Documents/obsidian_vaults/work/meetings",
+      "default": "/Users/tbenroeck/Documents/obsidian_vaults/snowflake/Meetings",
       "required": true
     },
     {
@@ -34,15 +34,15 @@
     {
       "flag": "-c",
       "label": "Cortex Connection",
-      "default": "Snowflake",
+      "default": "Snowhouse",
       "required": false
     }
   ],
   "data_files": [
     {
-      "file": ".cortex/skills/meeting-summarizer/attendees.json",
-      "label": "Attendees",
-      "description": "List of known attendees for name correction and recognition in meeting summaries.",
+      "file": ".cortex/skills/meeting-summarizer/known_names.json",
+      "label": "Known Names",
+      "description": "Names frequently mistranscribed by speech-to-text. Used to correct phonetic misspellings in transcripts (e.g. 'Fawni' → 'Phani Alapaty').",
       "editor": "string_list"
     }
   ]

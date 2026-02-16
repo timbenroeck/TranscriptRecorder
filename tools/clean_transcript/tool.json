@@ -3,6 +3,8 @@
   "description": "First-pass cleanup of meeting transcripts. Backs up the original to .backup/, then overwrites it with a cleaned version. Removes filler words, (Unverified) tags, stuttered words, and applies terminology corrections.",
   "script": "clean_transcript.py",
   "streaming": false,
+  "idle_warning_seconds": 150,
+  "idle_kill_seconds": 300,
   "parameters": [
     {
       "flag": "-t",

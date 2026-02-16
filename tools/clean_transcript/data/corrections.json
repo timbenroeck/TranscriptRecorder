@@ -1,9 +1,8 @@
 {
-    "CONA": ["cona", "kona"],
-    "Databricks": ["data bricks", "databricks", "DataBricks"],
     "Snowflake": ["snowflake", "snow flake"],
     "Power BI": ["powerbi", "power bi", "powerby"],
     "Azure": ["azure"],
+    "Databricks": ["data bricks", "databricks", "DataBricks"],
     "Microsoft Fabric": ["microsoft fabric", "ms fabric"],
     "OneLake": ["onelake", "one lake"],
     "DirectLake": ["directlake", "direct lake"],

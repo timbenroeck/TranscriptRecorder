@@ -23,7 +23,7 @@ usage() {
     echo "  -c    Cortex connection name (e.g. snowflake). If omitted, uses the default connection."
     echo ""
     echo "Example:"
-    echo "  $0 -m ~/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom -o /path/to/output"
+    echo "  $0 -m /Users/tbenroeck/Documents/transcriptrecorder/recordings/recording_2026-02-06_1106_zoom -o /path/to/output"
     echo "  $0 -m /path/to/meeting -f John -l Smith -o /path/to/output"
     echo "  $0 -m /path/to/meeting -c snowflake -o /path/to/output"
     exit 1

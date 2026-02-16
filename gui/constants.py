@@ -117,3 +117,55 @@ def resource_path(relative_path: str) -> Path:
     else:
         base_path = Path(__file__).parent.parent
     return base_path / relative_path
+
+
+def ensure_ssl_certs() -> None:
+    """Ensure a valid TLS CA certificate bundle is available.
+
+    py2app bundles extract certifi's ``cacert.pem`` to a temp file that
+    macOS may clean up between launches.  When the temp file is gone,
+    any HTTPS call (Google Calendar API, update checks, etc.) fails with
+    "Could not find a suitable TLS CA certificate bundle".
+
+    This function detects the stale path and writes the cert data to a
+    stable location inside App Support, then sets the environment
+    variables that ``requests`` / ``urllib3`` / ``ssl`` honour.
+    """
+    import os
+
+    try:
+        import certifi
+    except ImportError:
+        return  # certifi not installed; nothing to fix
+
+    cert_path = certifi.where()
+    if os.path.isfile(cert_path):
+        return  # cert file is accessible — nothing to do
+
+    # Cert file is missing (temp dir cleaned up).  Write it to App Support.
+    stable_cert = str(APP_SUPPORT_DIR / "cacert.pem")
+
+    if not os.path.isfile(stable_cert):
+        try:
+            cert_data = certifi.contents()
+        except AttributeError:
+            # certifi < 2023 — fall back to reading the package data
+            try:
+                from importlib import resources as _res
+                cert_data = _res.read_text("certifi", "cacert.pem")
+            except Exception:
+                logger.warning("ensure_ssl_certs: could not read certifi data")
+                return
+
+        APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(stable_cert, "w", encoding="utf-8") as f:
+                f.write(cert_data)
+            logger.info(f"ensure_ssl_certs: wrote CA bundle to {stable_cert}")
+        except OSError as exc:
+            logger.warning(f"ensure_ssl_certs: failed to write CA bundle: {exc}")
+            return
+
+    os.environ["SSL_CERT_FILE"] = stable_cert
+    os.environ["REQUESTS_CA_BUNDLE"] = stable_cert
+    logger.info(f"ensure_ssl_certs: set SSL_CERT_FILE={stable_cert}")

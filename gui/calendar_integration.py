@@ -446,7 +446,11 @@ def _name_from_email(email: str) -> str:
 
 
 def format_attendees(attendees: List[Dict[str, Any]]) -> str:
-    """Build a formatted attendee list from Google Calendar attendee dicts."""
+    """Build a formatted attendee list from Google Calendar attendee dicts.
+
+    Output is a simple list of names and emails — no status tags
+    (optional, accepted, declined, etc.) are included.
+    """
     if not attendees:
         return ""
 
@@ -454,18 +458,7 @@ def format_attendees(attendees: List[Dict[str, Any]]) -> str:
     for att in attendees:
         email = att.get("email", "")
         name = att.get("displayName", "") or _name_from_email(email)
-
-        tags: List[str] = []
-        if att.get("organizer"):
-            tags.append("organizer")
-        if att.get("optional"):
-            tags.append("optional")
-        status = att.get("responseStatus", "")
-        if status and status != "needsAction":
-            tags.append(status)
-
-        tag_str = f" [{', '.join(tags)}]" if tags else ""
-        lines.append(f"- {name} ({email}){tag_str}")
+        lines.append(f"- {name} ({email})")
 
     return "\n".join(lines)
 
@@ -494,7 +487,7 @@ def build_notes(
         Platform: Microsoft Teams
 
         Attendees (12):
-        - Name (email) [tags]
+        - Name (email)
         ...
 
         Description:

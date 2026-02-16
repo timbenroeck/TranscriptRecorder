@@ -2630,8 +2630,19 @@ class TranscriptRecorderApp(QMainWindow):
             logger.debug(f"Tools: no tools found in {self._tool_scripts_dir}")
 
     def _get_builtin_values(self) -> Dict[str, str]:
-        """Return a mapping of built-in parameter names to current app values."""
+        """Return a mapping of built-in parameter names to current app values.
+
+        Categories:
+        - Session builtins: require an active recording (meeting_directory, etc.)
+        - Meeting date builtins: parsed from the Date/Time GUI field
+        - Current date builtins: always available from the system clock
+        - Meeting details builtins: from the GUI Meeting Details fields
+        - System builtins: paths and user info, always available
+        - env:<VAR> builtins: resolved separately in _resolve_builtin()
+        """
         values: Dict[str, str] = {}
+
+        # --- Session builtins (require a loaded recording) ---
         if self.current_recording_path:
             values["meeting_directory"] = str(self.current_recording_path)
         if self.merged_transcript_path:
@@ -2642,7 +2653,65 @@ class TranscriptRecorderApp(QMainWindow):
             values["export_directory"] = str(self.export_base_dir)
         if self.selected_app_key:
             values["app_name"] = self.selected_app_key
+
+        # --- Meeting date builtins (parsed from the Date/Time field) ---
+        meeting_dt = self._parse_datetime(self.meeting_datetime_input.text())
+        if meeting_dt:
+            values["meeting_date"] = meeting_dt.strftime("%Y-%m-%d")
+            values["meeting_date_year_month"] = meeting_dt.strftime("%Y-%m")   # 2026-02
+            values["meeting_date_year"] = meeting_dt.strftime("%Y")
+            values["meeting_date_month"] = meeting_dt.strftime("%m")
+            values["meeting_date_month_name"] = meeting_dt.strftime("%B")      # February
+            values["meeting_date_month_short"] = meeting_dt.strftime("%b")     # Feb
+
+        # --- Meeting details builtins (from the GUI fields) ---
+        meeting_name = self.meeting_name_input.text().strip()
+        if meeting_name:
+            values["meeting_name"] = meeting_name
+        meeting_datetime_raw = self.meeting_datetime_input.text().strip()
+        if meeting_datetime_raw:
+            values["meeting_datetime"] = meeting_datetime_raw
+
+        # --- Current date builtins (always available) ---
+        now = datetime.now()
+        values["current_date"] = now.strftime("%Y-%m-%d")
+        values["current_date_year_month"] = now.strftime("%Y-%m")
+        values["current_date_year"] = now.strftime("%Y")
+        values["current_date_month"] = now.strftime("%m")
+        values["current_date_month_name"] = now.strftime("%B")
+        values["current_date_month_short"] = now.strftime("%b")
+
+        # --- System builtins (always available) ---
+        values["home_directory"] = str(Path.home())
+        values["user_name"] = os.environ.get("USER", os.environ.get("USERNAME", ""))
+        if self._tool_scripts_dir:
+            values["tools_directory"] = str(self._tool_scripts_dir)
+        # tool_directory is added per-tool in _resolve_builtin()
+
         return values
+
+    def _resolve_builtin(self, builtin_key: str, builtins: Dict[str, str],
+                         tool_def: Optional[dict] = None) -> Optional[str]:
+        """Resolve a single builtin key to its value.
+
+        Handles the env:<VAR> prefix for environment variable lookups,
+        the tool_directory key (per-tool), and plain builtin dict lookups.
+        Returns None if the key cannot be resolved.
+        """
+        # env: prefix — look up an environment variable
+        if builtin_key.startswith("env:"):
+            var_name = builtin_key[4:]
+            val = os.environ.get(var_name)
+            return val  # None if not set → caller falls through to default
+
+        # tool_directory — resolved per-tool from its definition
+        if builtin_key == "tool_directory" and tool_def:
+            tool_dir = tool_def.get("_tool_dir")
+            if tool_dir:
+                return str(tool_dir)
+            return None
+
+        return builtins.get(builtin_key)
 
     def _on_tool_changed(self, index: int):
         """Handle tool selection change -- populate the parameters table."""
@@ -2692,7 +2761,8 @@ class TranscriptRecorderApp(QMainWindow):
             self.tool_params_table.setItem(row, 1, label_item)
             
             if builtin_key:
-                value = builtins.get(builtin_key, f"<{builtin_key}>")
+                resolved = self._resolve_builtin(builtin_key, builtins, tool_def)
+                value = resolved if resolved is not None else f"<{builtin_key}>"
             else:
                 value = str(default)
             value_item = QTableWidgetItem(value)
@@ -3270,6 +3340,17 @@ class TranscriptRecorderApp(QMainWindow):
         self.meeting_notes_input.setPlainText(notes)
 
         self.meeting_details_dirty = True
+
+        # Serialize the full calendar event to event.json
+        if self.current_recording_path and self._ensure_recording_folder():
+            event_json_path = self.current_recording_path / "event.json"
+            try:
+                raw_event = event_data.get("raw", {})
+                with open(event_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(raw_event, f, indent=2, default=str)
+                logger.info(f"Calendar: saved event.json to {event_json_path}")
+            except Exception as e:
+                logger.error(f"Calendar: failed to save event.json: {e}")
 
         self._set_status(f"Loaded: {name}", "info")
         logger.info(f"Calendar: populated meeting details from '{name}'")
@@ -4155,7 +4236,12 @@ def main():
     if sys.platform != "darwin":
         print("This application only runs on macOS.")
         sys.exit(1)
-        
+
+    # Fix stale TLS cert bundles in py2app builds (must run before any
+    # HTTPS calls — calendar fetch, update check, etc.)
+    from gui.constants import ensure_ssl_certs
+    ensure_ssl_certs()
+
     app = QApplication(sys.argv)
     
     # macOS-specific settings

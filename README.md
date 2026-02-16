@@ -117,6 +117,7 @@ recordings/
         └── recording_2025-02-08_1430_zoom/
             ├── meeting_transcript.txt      # Merged transcript
             ├── meeting_details.txt         # Meeting metadata
+            ├── event.json                  # Google Calendar event data (when populated from calendar)
             └── .snapshots/                 # Individual capture snapshots
 ```
 
@@ -242,15 +243,16 @@ tools/
 
 #### Built-in Parameter Values
 
-Parameters with a `"builtin"` key are automatically resolved at run-time:
+Parameters with a `"builtin"` key are automatically resolved at run-time. The full list is documented in [`docs/TOOLS.md`](docs/TOOLS.md#built-in-parameter-values). Summary of categories:
 
-| `builtin` value | Resolves to |
-|-----------------|-------------|
-| `meeting_directory` | Full path to the current recording folder |
-| `meeting_transcript` | Full path to `meeting_transcript.txt` |
-| `meeting_details` | Full path to `meeting_details.txt` |
-| `export_directory` | Base export directory |
-| `app_name` | Key of the selected source (e.g. `zoom`, `msteams`, `manual`) |
+| Category | Example builtins | Availability |
+|----------|-----------------|--------------|
+| **Session** | `meeting_directory`, `meeting_transcript`, `meeting_details`, `export_directory`, `app_name` | Requires a loaded recording |
+| **Meeting Date** | `meeting_date`, `meeting_date_year_month`, `meeting_date_year`, `meeting_date_month`, `meeting_date_month_name`, `meeting_date_month_short` | Requires a Date/Time value |
+| **Meeting Details** | `meeting_name`, `meeting_datetime` | Requires Meeting Details fields |
+| **Current Date** | `current_date`, `current_date_year_month`, `current_date_year`, `current_date_month`, `current_date_month_name`, `current_date_month_short` | Always available |
+| **System** | `home_directory`, `user_name`, `tools_directory`, `tool_directory` | Always available |
+| **Environment** | `env:VARIABLE_NAME` | Set if the env var exists |
 
 ### Managing Tools
 
@@ -306,6 +308,7 @@ Transcript Recorder can optionally integrate with Google Calendar to populate me
 3. Click the **date** in the dialog header to open the date picker and view events for a different day
 4. Select an event and click **Select** (or double-click) to populate the meeting details
    - If meaningful meeting details (name or notes) already exist, you are prompted to confirm overwrite
+   - The full Google Calendar event is also saved as `event.json` in the recording folder
 5. Use the **refresh** button in the dialog header to re-fetch events from Google
 6. Toggle **Filter conference info** at the bottom to include or exclude Zoom/Teams/WebEx join links and boilerplate from the notes
 
@@ -469,6 +472,30 @@ pip install -r requirements.txt
 python gui_app.py
 ```
 
+### Utility Scripts
+
+The `scripts/` folder contains maintenance and migration utilities:
+
+| Script | Description |
+|--------|-------------|
+| `backfill_calendar_events.py` | Match existing recordings to Google Calendar events and enrich them with event data, meeting details, and corrected timestamps. Supports `--dry-run` for preview. |
+| `backfill_attendees_frontmatter.py` | Backfill attendees from `meeting_details.txt` into Obsidian summary frontmatter. Writes `attendees` (wikilinks) and `attendee_emails` (plain emails) as separate YAML lists. Strips org-code bracket suffixes and filters conference room entries. Supports `--dry-run`. |
+| `migrate_attendees_split.py` | One-time migration to convert the old combined `"[[Name]] (email)"` attendee format into the split `attendees` + `attendee_emails` format. |
+| `migrate_recordings.py` | Migrate old-format recordings into the `YYYY/MM` directory structure |
+| `batch_clean_and_summarize.sh` | Walk a directory tree, find recording folders, and run tools on each. Supports per-tool flags (`--clean`, `--summarize`, `--tag`, `--all`), `--dry-run`, `--force`, `--min-bytes`, and vivun tagger options (`--tag-date`, `--tag-se-name`). Defaults to `--clean --summarize` when no tool flags are given. |
+
+```bash
+# Preview what the calendar backfill would do
+.venv/bin/python scripts/backfill_calendar_events.py --dry-run --verbose
+
+# Run the backfill for real
+.venv/bin/python scripts/backfill_calendar_events.py --verbose
+
+# Backfill attendees into Obsidian summaries
+.venv/bin/python scripts/backfill_attendees_frontmatter.py --dry-run --verbose
+.venv/bin/python scripts/backfill_attendees_frontmatter.py --verbose
+```
+
 ### Building the App Bundle
 
 ```bash
@@ -499,7 +526,7 @@ The `bundle.json` file at the repo root controls which sources and tools are shi
 }
 ```
 
-Only explicitly listed items are included in the app bundle. Other sources and tools in the repo (e.g. `slack`, `webex`, `summarize_meeting_coco`) remain available for download via the Import menus but are not shipped with the app.
+Only explicitly listed items are included in the app bundle. Other sources and tools in the repo (e.g. `slack`, `webex`, `summarize_meeting_coco`, `vivun_meeting_frontmatter_coco`) remain available for download via the Import menus but are not shipped with the app.
 
 ## License
 

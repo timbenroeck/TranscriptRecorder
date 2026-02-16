@@ -82,7 +82,7 @@ FILLER_PATTERNS = [
 # Words allowed to appear doubled because they are grammatically valid.
 # "that that" — "I knew that that would happen"
 # "had had"   — "She had had enough" (past perfect)
-STUTTER_ALLOWLIST = {'that', 'had', 'do'}
+STUTTER_ALLOWLIST = {'that', 'had'}
 
 # 3+ repetitions of any word — always a stutter, no allowlist needed
 # e.g. "I I I think" -> "I think", "the the the" -> "the"
@@ -435,13 +435,10 @@ def main():
     else:
         # Back up the original before overwriting (unless --no-backup)
         if not args.no_backup:
-            from datetime import datetime as _dt
             transcript_dir = os.path.dirname(os.path.abspath(args.transcript))
             backup_dir = os.path.join(transcript_dir, '.backup')
             os.makedirs(backup_dir, exist_ok=True)
-            base, ext = os.path.splitext(os.path.basename(args.transcript))
-            timestamp = _dt.now().strftime('%Y%m%d_%H%M%S')
-            backup_path = os.path.join(backup_dir, f"{base}_{timestamp}{ext}")
+            backup_path = os.path.join(backup_dir, os.path.basename(args.transcript))
             shutil.copy2(args.transcript, backup_path)
             if not args.quiet:
                 print(f"Backup saved: {backup_path}", file=sys.stderr)
