@@ -3,6 +3,7 @@ Background QThread workers for recording, tool execution, and update checking.
 """
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -101,6 +102,9 @@ class ToolRunnerWorker(QThread):
         safely ignored.
         """
         env = os.environ.copy()
+        # Suppress colour / ANSI output from CLI tools running inside the GUI
+        env["NO_COLOR"] = "1"
+        env["TERM"] = "dumb"
         try:
             shell = os.environ.get("SHELL", "/bin/zsh")
             marker = "__TR_PATH_MARKER__"
@@ -214,12 +218,24 @@ class ToolRunnerWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# ANSI escape-code stripping
+# ---------------------------------------------------------------------------
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI/SGR escape sequences (colours, bold, etc.) from *text*."""
+    return _ANSI_RE.sub("", text)
+
+
+# ---------------------------------------------------------------------------
 # Stream parsers — each is a callable: (raw_line: str) -> Optional[str]
 # ---------------------------------------------------------------------------
 
 def _stream_parser_raw(raw_line: str) -> Optional[str]:
-    """Pass every line through as-is."""
-    return raw_line.rstrip("\n")
+    """Pass every line through as-is (ANSI codes stripped)."""
+    return strip_ansi(raw_line.rstrip("\n"))
 
 
 def _stream_parser_cortex_json(raw_line: str) -> Optional[str]:
@@ -230,7 +246,7 @@ def _stream_parser_cortex_json(raw_line: str) -> Optional[str]:
     try:
         obj = json.loads(line)
     except (json.JSONDecodeError, ValueError):
-        return line  # fall back to raw
+        return strip_ansi(line)  # fall back to raw, stripping ANSI
 
     msg = obj.get("message", {})
     content_list = msg.get("content", [])

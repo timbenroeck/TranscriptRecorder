@@ -42,7 +42,7 @@ from gui.icons import IconManager
 from gui.workers import (
     RecordingWorker, ToolRunnerWorker, StreamingToolRunnerWorker,
     UpdateCheckWorker, ToolFetchWorker, CalendarFetchWorker,
-    STREAM_PARSERS, _stream_parser_raw,
+    STREAM_PARSERS, _stream_parser_raw, strip_ansi,
 )
 from gui.dialogs import LogViewerDialog, PermissionsDialog, ThemedMessageDialog, WelcomeDialog
 from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
@@ -2994,6 +2994,7 @@ class TranscriptRecorderApp(QMainWindow):
     
     def _on_tool_output_line(self, text: str):
         """Append a single streaming line to the tool output area (real-time)."""
+        text = strip_ansi(text)
         cursor = self.tool_output_area.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.tool_output_area.setTextCursor(cursor)
@@ -3020,9 +3021,9 @@ class TranscriptRecorderApp(QMainWindow):
         current = self.tool_output_area.toPlainText()
         parts = [current]
         if not is_streaming and stdout:
-            parts.append(stdout)
+            parts.append(strip_ansi(stdout))
         if stderr:
-            parts.append(f"\n--- stderr ---\n{stderr}")
+            parts.append(f"\n--- stderr ---\n{strip_ansi(stderr)}")
         
         if cancelled:
             parts.append(f"\n{'—' * 60}\nCancelled after {elapsed_str}")
