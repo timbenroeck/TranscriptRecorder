@@ -1356,15 +1356,52 @@ class TranscriptRecorderApp(QMainWindow):
         self._update_button_states()
             
     def _on_startup_update_available(self, version: str, release_url: str, notes: str, assets: list):
-        """Handle notification that a new version is available (from background check)."""
-        ThemedMessageDialog.info(
+        """Handle notification that a new version is available (from background check).
+
+        Respects the ``skipped_update_version`` setting in config — if the user
+        previously chose to skip this exact version the dialog is suppressed.
+        """
+        skipped = ""
+        if self.config:
+            skipped = self.config.get("client_settings", {}).get(
+                "skipped_update_version", ""
+            )
+        if skipped and skipped == version:
+            logger.debug(f"Startup update check: version {version} was skipped by user")
+            return
+
+        dlg = ThemedMessageDialog(
             self,
             "Update Available",
-            f"A new version of {APP_NAME} is available! "
-            f"Current version: {APP_VERSION}. "
-            f"Latest version: {version}. "
-            f"You can download it from the Maintenance menu → Check for Updates."
+            f"A new version of {APP_NAME} is available!\n\n"
+            f"Current version: {APP_VERSION}\n"
+            f"Latest version: {version}\n\n"
+            f"You can download it from the Maintenance menu \u2192 Check for Updates.",
+            level="info",
+            buttons=[
+                ("Skip This Version", "", "skip"),
+                ("Remind Me Later", "", "later"),
+                ("OK", "primary", "ok"),
+            ],
         )
+        dlg.exec()
+
+        if dlg._result_value == 0:  # "Skip This Version"
+            self._save_skipped_update_version(version)
+
+    def _save_skipped_update_version(self, version: str):
+        """Persist the skipped update version into config.json."""
+        try:
+            if self.config is None:
+                return
+            if "client_settings" not in self.config:
+                self.config["client_settings"] = {}
+            self.config["client_settings"]["skipped_update_version"] = version
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(self.config, f, indent=2)
+            logger.info(f"Config: user chose to skip update version {version}")
+        except Exception as exc:
+            logger.warning(f"Config: failed to save skipped_update_version: {exc}")
     
     def _on_app_changed(self, index: int):
         """Handle application selection change."""
@@ -4217,6 +4254,8 @@ class TranscriptRecorderApp(QMainWindow):
             logger.error("Update download: missing download URL or filename")
             ThemedMessageDialog.warning(self, "Download Failed", "Could not get download URL.")
             return
+        
+        self._save_skipped_update_version("")
         
         try:
             self.statusBar().showMessage(f"Downloading {filename}...")

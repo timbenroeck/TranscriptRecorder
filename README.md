@@ -309,7 +309,8 @@ The application configuration is stored at `~/Library/Application Support/Transc
   },
   "client_settings": {
     "export_directory": "",
-    "default_source": ""
+    "default_source": "",
+    "skipped_update_version": ""
   },
   "google_calendar": {
     "enabled": false,
@@ -325,6 +326,7 @@ The application configuration is stored at `~/Library/Application Support/Transc
 | `logging.log_file_name` | Log filename inside the `.logs` directory |
 | `client_settings.export_directory` | Where recordings, sources, and tools are stored |
 | `client_settings.default_source` | Source key selected on startup (e.g. `zoom`, `manual`) |
+| `client_settings.skipped_update_version` | Version string the user chose to skip (e.g. `1.5.0`); cleared on download |
 | `google_calendar.enabled` | Enable/disable the Google Calendar integration |
 | `google_calendar.client_secret_path` | Path to your Google OAuth `client_secret.json` file |
 

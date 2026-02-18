@@ -6,7 +6,8 @@
   },
   "client_settings": {
     "export_directory": "",
-    "default_source": "manual"
+    "default_source": "manual",
+    "skipped_update_version": ""
   },
   "google_calendar": {
     "enabled": false,
