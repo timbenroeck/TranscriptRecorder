@@ -427,6 +427,8 @@ See [Granting Accessibility Permissions](#granting-accessibility-permissions) ab
 - Try clicking **"Capture"** to test manual capture
 - Check the **log file** (View → Log File) for error details
 
+> **Note:** Some Electron apps (Teams, Slack, etc.) lazily build their accessibility tree and may not expose sub-elements until prompted. Transcript Recorder automatically "pokes" each application before searching by setting `AXManualAccessibility` and reading the window tree. Check the log for `AX poke` entries to confirm this ran.
+
 ### Application not detected
 
 - Verify the meeting app is **running**

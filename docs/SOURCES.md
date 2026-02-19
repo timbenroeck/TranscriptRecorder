@@ -559,6 +559,8 @@ The CI validation workflow will block any PR that creates a `sources/manual/` di
   - `"all search paths exhausted"` — none of the defined paths found the transcript element
   - `"transcript element not found"` — the search ran but no matching element was located
 
+> **Accessibility tree not populated:** Some Electron apps (Teams, Slack, etc.) lazily build their accessibility tree and may not expose sub-elements until an assistive-technology client signals intent. Before searching each process, Transcript Recorder automatically sets `AXManualAccessibility = True` on the app-level element and reads its windows and children to force the tree to populate. This runs for every source, not just Teams. Look for `AX poke` log entries to confirm it ran and whether the attribute was accepted.
+
 ### Search path not finding the element
 
 - **Increase `levels_deep`** — the element may be deeper in the tree than expected

@@ -45,12 +45,14 @@ try:
     from ApplicationServices import (
         AXUIElementCreateApplication,
         AXUIElementCopyAttributeValue,
+        AXUIElementSetAttributeValue,
         kAXChildrenAttribute,
         kAXTitleAttribute,
         kAXValueAttribute,
         kAXRoleAttribute,
         kAXSubroleAttribute,
         kAXDescriptionAttribute,
+        kAXWindowsAttribute,
         AXIsProcessTrusted,
     )
     kAXErrorSuccess = 0
@@ -59,12 +61,14 @@ except ImportError:
     _HAS_AX = False
     AXUIElementCreateApplication = None  # type: ignore
     AXUIElementCopyAttributeValue = None  # type: ignore
+    AXUIElementSetAttributeValue = None  # type: ignore
     kAXChildrenAttribute = ""  # type: ignore
     kAXTitleAttribute = ""  # type: ignore
     kAXValueAttribute = ""  # type: ignore
     kAXRoleAttribute = ""  # type: ignore
     kAXSubroleAttribute = ""  # type: ignore
     kAXDescriptionAttribute = ""  # type: ignore
+    kAXWindowsAttribute = ""  # type: ignore
     AXIsProcessTrusted = lambda: False  # type: ignore
     kAXErrorSuccess = 1  # type: ignore
 
@@ -85,6 +89,42 @@ def _ax_get(element: Any, attr: str) -> Any:
         return value if err == kAXErrorSuccess else None
     except Exception:
         return None
+
+
+def _force_accessibility_refresh(app_ref: Any, pid: int) -> None:
+    """Poke an app's AX tree so lazy Electron apps expose their elements.
+
+    Sets ``AXManualAccessibility = True`` on the app element, then reads
+    windows and their children to force the tree to materialise.  Safe to
+    call on any process — unsupported attributes are silently ignored.
+    """
+    if app_ref is None or AXUIElementSetAttributeValue is None:
+        return
+    try:
+        err = AXUIElementSetAttributeValue(
+            app_ref, "AXManualAccessibility", True,
+        )
+        if err == kAXErrorSuccess:
+            logger.debug("AX poke (inspector): set AXManualAccessibility=True on PID %d", pid)
+        else:
+            logger.debug(
+                "AX poke (inspector): AXManualAccessibility not supported by PID %d "
+                "(error=%s), continuing anyway", pid, err,
+            )
+
+        windows = _ax_get(app_ref, kAXWindowsAttribute)
+        if windows:
+            for win in windows:
+                _ax_get(win, kAXChildrenAttribute)
+        else:
+            _ax_get(app_ref, kAXChildrenAttribute)
+
+        logger.debug(
+            "AX poke (inspector): tickled AX tree for PID %d (%d windows)",
+            pid, len(windows) if windows else 0,
+        )
+    except Exception as exc:
+        logger.warning("AX poke (inspector): unexpected error for PID %d: %s", pid, exc)
 
 
 def _get_window_map() -> Dict[int, List[str]]:
@@ -494,6 +534,8 @@ class _AXTreeWorker(QThread):
                 self.error.emit(f"Cannot create AX element for PID {self.pid}.")
                 return
 
+            _force_accessibility_refresh(app_ref, self.pid)
+
             # Bump recursion limit for very deep trees
             old_limit = sys.getrecursionlimit()
             sys.setrecursionlimit(max(old_limit, 2000))
@@ -594,6 +636,8 @@ class _TestExportWorker(QThread):
             if app_ref is None:
                 self.error.emit(f"Cannot create AX element for PID {self.pid}.")
                 return
+
+            _force_accessibility_refresh(app_ref, self.pid)
 
             # Step 1: Find the transcript element using the configured steps
             if not self.steps:

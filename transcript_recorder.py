@@ -17,6 +17,7 @@ try:
     from ApplicationServices import (
         AXUIElementCreateApplication,
         AXUIElementCopyAttributeValue,
+        AXUIElementSetAttributeValue,
         kAXChildrenAttribute,
         kAXRowsAttribute,
         kAXTitleAttribute,
@@ -24,23 +25,22 @@ try:
         kAXRoleAttribute,
         kAXSubroleAttribute,
         kAXDescriptionAttribute,
+        kAXWindowsAttribute,
         AXIsProcessTrusted,
-        # kAXErrorSuccess is 0, can be checked directly or defined
     )
-    # Define kAXErrorSuccess if not directly available or for clarity
-    kAXErrorSuccess = 0 # ax_error.h defines this as 0
+    kAXErrorSuccess = 0
 except ImportError:
-    # Allow an error or a stub for non-macOS development if needed,
-    # but the class is fundamentally macOS-dependent.
     print("Warning: ApplicationServices not found. This class is macOS-specific.")
     AXUIElementCreateApplication = None # type: ignore
     AXUIElementCopyAttributeValue = None # type: ignore
+    AXUIElementSetAttributeValue = None # type: ignore
     kAXChildrenAttribute = "" # type: ignore
     kAXTitleAttribute = "" # type: ignore
     kAXValueAttribute = "" # type: ignore
     kAXRoleAttribute = "" # type: ignore
     kAXSubroleAttribute = "" # type: ignore
     kAXDescriptionAttribute = "" # type: ignore
+    kAXWindowsAttribute = "" # type: ignore
     AXIsProcessTrusted = lambda: False # type: ignore
     kAXErrorSuccess = 1 # type: ignore
 
@@ -280,6 +280,67 @@ class TranscriptRecorder:
                              queue.append((child, current_depth + 1))
         return matches
 
+    async def force_accessibility_refresh(self, pid: int) -> bool:
+        """Force an application to populate its accessibility tree.
+
+        Some Electron apps (Teams, Slack, etc.) lazily build their AX tree
+        and may not expose sub-elements until an assistive-technology client
+        signals intent.  This method:
+
+        1. Sets the ``AXManualAccessibility`` attribute to ``True`` on the
+           app-level AXUIElement, telling the process that an AT client is
+           actively inspecting it.
+        2. Reads ``AXWindows`` and ``AXChildren`` of each window to "tickle"
+           the tree and prompt the app to materialise its elements.
+
+        Safe to call on any process — if the attribute is unsupported the
+        set call is silently ignored.
+
+        Returns True if the poke was attempted, False if prerequisites are
+        missing (e.g. ApplicationServices unavailable).
+        """
+        if AXUIElementSetAttributeValue is None or AXUIElementCreateApplication is None:
+            return False
+
+        try:
+            app_ref = await _run_blocking_io(AXUIElementCreateApplication, pid)
+            if not app_ref:
+                self.logger.debug(f"AX poke: could not create element for PID {pid}")
+                return False
+
+            # 1. Tell the app an AT client is present
+            err = await _run_blocking_io(
+                AXUIElementSetAttributeValue,
+                app_ref,
+                "AXManualAccessibility",
+                True,
+            )
+            if err == kAXErrorSuccess:
+                self.logger.debug(f"AX poke: set AXManualAccessibility=True on PID {pid}")
+            else:
+                self.logger.debug(
+                    f"AX poke: AXManualAccessibility not supported by PID {pid} "
+                    f"(error={err}), continuing anyway"
+                )
+
+            # 2. Tickle the tree — read windows, then children of each window
+            windows = await self._get_ax_attribute(app_ref, kAXWindowsAttribute)
+            if windows:
+                for win in windows:
+                    await self._get_ax_attribute(win, kAXChildrenAttribute)
+            else:
+                await self._get_ax_attribute(app_ref, kAXChildrenAttribute)
+
+            self.logger.debug(
+                f"AX poke: tickled AX tree for PID {pid} "
+                f"({len(windows) if windows else 0} windows)"
+            )
+            return True
+
+        except Exception as exc:
+            self.logger.warning(f"AX poke: unexpected error for PID {pid}: {exc}")
+            return False
+
     async def find_transcript_element(self) -> bool:
         """
         Attempts to find the transcript element based on search paths in app_config.
@@ -309,6 +370,10 @@ class TranscriptRecorder:
 
         for pid in pids:
             self.logger.debug(f"Element search: checking PID {pid} for '{self.app_identifier}'")
+
+            # Poke the app's AX tree so lazy Electron apps expose their elements
+            await self.force_accessibility_refresh(pid)
+
             app_ref = await _run_blocking_io(AXUIElementCreateApplication, pid)
             if not app_ref:
                 self.logger.warning(f"Element search: could not create AXUIElement for PID {pid}")
