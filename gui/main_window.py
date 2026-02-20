@@ -310,6 +310,7 @@ class TranscriptRecorderApp(QMainWindow):
         details_notes_row.setSpacing(6)
         
         self.meeting_notes_input = QTextEdit()
+        self.meeting_notes_input.setAcceptRichText(False)
         self.meeting_notes_input.setPlaceholderText("Enter meeting notes, attendees, action items, etc...")
         self.meeting_notes_input.setFont(QFont("SF Pro", 12))
         self.meeting_notes_input.textChanged.connect(self._on_meeting_details_changed)
@@ -385,6 +386,7 @@ class TranscriptRecorderApp(QMainWindow):
         transcript_row.setSpacing(6)
         
         self.transcript_text = QTextEdit()
+        self.transcript_text.setAcceptRichText(False)
         self.transcript_text.setReadOnly(True)
         self.transcript_text.setPlaceholderText(
             "Transcript will appear here after recording starts...\n\n"
@@ -593,6 +595,7 @@ class TranscriptRecorderApp(QMainWindow):
         tool_output_row.setSpacing(6)
         
         self.tool_output_area = QTextEdit()
+        self.tool_output_area.setAcceptRichText(False)
         self.tool_output_area.setReadOnly(True)
         self.tool_output_area.setPlaceholderText(
             "Select a tool from the dropdown above and click Run.\n\n"
@@ -1818,7 +1821,7 @@ class TranscriptRecorderApp(QMainWindow):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             self._loading_transcript = True
-            self.transcript_text.setText(content)
+            self.transcript_text.setPlainText(content)
             self._loading_transcript = False
             
             # Count actual lines in the merged file and track for delta display

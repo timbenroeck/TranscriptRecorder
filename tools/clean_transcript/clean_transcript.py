@@ -33,6 +33,7 @@ Examples:
 """
 
 import argparse
+from datetime import datetime
 import json
 import os
 import re
@@ -438,7 +439,10 @@ def main():
             transcript_dir = os.path.dirname(os.path.abspath(args.transcript))
             backup_dir = os.path.join(transcript_dir, '.backup')
             os.makedirs(backup_dir, exist_ok=True)
-            backup_path = os.path.join(backup_dir, os.path.basename(args.transcript))
+            base_name = os.path.basename(args.transcript)
+            name, ext = os.path.splitext(base_name)
+            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+            backup_path = os.path.join(backup_dir, f"{name}_{timestamp}{ext}")
             shutil.copy2(args.transcript, backup_path)
             if not args.quiet:
                 print(f"Backup saved: {backup_path}", file=sys.stderr)
