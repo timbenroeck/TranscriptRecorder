@@ -95,12 +95,12 @@ if [ -n "$CORTEX_CONNECTION" ]; then
     echo "cortex --bypass --output-format stream-json -m $MODEL -c $CORTEX_CONNECTION  -p '$PROMPT'"
     echo "============================================"
     echo ""
-    cortex --bypass --output-format stream-json -m "$MODEL" -c "$CORTEX_CONNECTION" -p "$PROMPT"
+    cortex --output-format stream-json -m "$MODEL" -c "$CORTEX_CONNECTION" -p "$PROMPT"
 else
     echo ""
     echo "============================================"
     echo "cortex --bypass --output-format stream-json -m $MODEL  -p '$PROMPT'"
     echo "============================================"
     echo ""
-    cortex --bypass --output-format stream-json -m "$MODEL" -p "$PROMPT"
+    cortex --output-format stream-json -m "$MODEL" -p "$PROMPT"
 fi
