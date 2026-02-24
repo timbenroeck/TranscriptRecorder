@@ -311,7 +311,8 @@ The application configuration is stored at `~/Library/Application Support/Transc
   "client_settings": {
     "export_directory": "",
     "default_source": "",
-    "skipped_update_version": ""
+    "skipped_update_version": "",
+    "new_opens_window": false
   },
   "google_calendar": {
     "enabled": false,
@@ -328,6 +329,7 @@ The application configuration is stored at `~/Library/Application Support/Transc
 | `client_settings.export_directory` | Where recordings, sources, and tools are stored |
 | `client_settings.default_source` | Source key selected on startup (e.g. `zoom`, `manual`) |
 | `client_settings.skipped_update_version` | Version string the user chose to skip (e.g. `1.5.0`); cleared on download |
+| `client_settings.new_opens_window` | When `true`, pressing New while a session is active opens a new window instead of replacing the session |
 | `google_calendar.enabled` | Enable/disable the Google Calendar integration |
 | `google_calendar.client_secret_path` | Path to your Google OAuth `client_secret.json` file |
 
@@ -339,8 +341,10 @@ You can change the log level from **Maintenance → Log Level** without editing 
 
 | Menu Item | Shortcut | Description |
 |-----------|----------|-------------|
-| **New** | `Cmd+N` | Creates a new recording session |
+| **New** | `Cmd+N` | Creates a new recording session (opens a new window if *New Opens in Window* is enabled and a session is active) |
+| **New Window** | `Cmd+Shift+N` | Opens a new application window as a separate process |
 | **Reset** | `Cmd+R` | Stops any active capture and resets the session |
+| **New Opens in Window** | | Toggle: when enabled, pressing New while a session is active spawns a new window instead of replacing the current session |
 | **Open Export Folder** | `Cmd+O` | Opens the base export directory in Finder |
 
 ### Edit

@@ -801,9 +801,21 @@ class TranscriptRecorderApp(QMainWindow):
         new_action.triggered.connect(self._on_new_recording)
         file_menu.addAction(new_action)
         
+        new_window_action = QAction("New Window", self)
+        new_window_action.setShortcut("Ctrl+Shift+N")
+        new_window_action.triggered.connect(self._open_new_window)
+        file_menu.addAction(new_window_action)
+        
         reset_action = QAction("Reset", self)
         reset_action.triggered.connect(self._on_reset_recording)
         file_menu.addAction(reset_action)
+        
+        file_menu.addSeparator()
+        
+        self._new_opens_window_action = QAction("New Opens in Window", self)
+        self._new_opens_window_action.setCheckable(True)
+        self._new_opens_window_action.triggered.connect(self._toggle_new_opens_window)
+        file_menu.addAction(self._new_opens_window_action)
         
         file_menu.addSeparator()
         
@@ -1105,6 +1117,11 @@ class TranscriptRecorderApp(QMainWindow):
             saved_level = self.config.get("logging", {}).get("level", "INFO").upper()
             for action in self._log_level_group.actions():
                 action.setChecked(action.text() == saved_level)
+            
+            # Sync "New Opens in Window" checkbox
+            self._new_opens_window_action.setChecked(
+                self.config.get("client_settings", {}).get("new_opens_window", False)
+            )
             
             # Scan for sources and tools
             self._scan_sources()
@@ -1420,12 +1437,64 @@ class TranscriptRecorderApp(QMainWindow):
             logger.debug(f"App selection changed: {self.selected_app_key} "
                          f"(manual={self._is_manual_mode}, capture interval: {self.capture_interval}s)")
             
+    def _open_new_window(self):
+        """Spawn a new instance of the application in a separate process."""
+        try:
+            if getattr(sys, 'frozen', False):
+                # Running as a .app bundle — use `open -n` to force a new instance
+                app_path = Path(sys.executable).parent.parent.parent
+                subprocess.Popen(["open", "-n", "-a", str(app_path)])
+            else:
+                entry = Path(__file__).parent.parent / "gui_app.py"
+                subprocess.Popen([sys.executable, str(entry)])
+            logger.info("New window: spawned new application instance")
+        except Exception as e:
+            logger.error(f"New window: failed to spawn: {e}", exc_info=True)
+            ThemedMessageDialog.critical(
+                self, "Error", f"Failed to open a new window: {e}"
+            )
+
+    @property
+    def _new_opens_window(self) -> bool:
+        """Return True if the New button should open a new window when a session is active."""
+        if self.config:
+            return self.config.get("client_settings", {}).get("new_opens_window", False)
+        return False
+
+    def _toggle_new_opens_window(self):
+        """Toggle the 'New Opens in Window' setting and persist to config."""
+        new_value = self._new_opens_window_action.isChecked()
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            if "client_settings" not in config_data:
+                config_data["client_settings"] = {}
+            config_data["client_settings"]["new_opens_window"] = new_value
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            self.config = config_data
+            label = "enabled" if new_value else "disabled"
+            self.statusBar().showMessage(f"New Opens in Window: {label}")
+            logger.info(f"Config: new_opens_window set to {new_value}")
+        except Exception as e:
+            logger.error(f"Config: failed to save new_opens_window: {e}")
+            ThemedMessageDialog.critical(self, "Error", f"Failed to save setting: {e}")
+        self._update_button_states()
+
     def _on_new_recording(self):
         """Start a new recording session.
+
+        When *New Opens in Window* is enabled and a session is already active,
+        a new application window is spawned instead of replacing the current
+        session.
 
         For the built-in Manual Recording source no ``TranscriptRecorder`` is
         created — the user edits the transcript text area directly.
         """
+        has_session = self.recorder_instance is not None or self.current_recording_path is not None
+        if self._new_opens_window and has_session:
+            self._open_new_window()
+            return
         if not self.selected_app_key or not self._discovered_sources:
             logger.warning("New session: no application selected")
             ThemedMessageDialog.warning(self, "No Application", "Please select a meeting application first.")
@@ -2172,12 +2241,17 @@ class TranscriptRecorderApp(QMainWindow):
 
         # Manual Recording doesn't require accessibility and allows New
         # without accessibility permissions, but does not support capture.
+        # When "New Opens in Window" is enabled, New stays active during a
+        # session so the user can spawn a parallel window.
+        can_new_in_window = self._new_opens_window and has_session
         if self._is_manual_mode:
             self.app_combo.setEnabled(not has_session)
-            self.new_btn.setEnabled(not has_session)
+            self.new_btn.setEnabled(not has_session or can_new_in_window)
         else:
             self.app_combo.setEnabled(not has_session and self._has_accessibility)
-            self.new_btn.setEnabled(not has_session and self._has_accessibility)
+            self.new_btn.setEnabled(
+                (not has_session and self._has_accessibility) or can_new_in_window
+            )
 
         self.reset_btn.setEnabled(has_session)
 

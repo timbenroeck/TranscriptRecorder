@@ -907,6 +907,19 @@ class AccessibilityInspectorDialog(QMainWindow):
         self._match_count_label.setObjectName("secondary_label")
         self._match_count_label.setFixedWidth(120)
         ctrl2.addWidget(self._match_count_label)
+
+        self._expand_btn = QPushButton("Expand")
+        self._expand_btn.setProperty("class", "secondary-action")
+        self._expand_btn.setToolTip("Expand all children of the selected node (or entire tree)")
+        self._expand_btn.clicked.connect(self._on_expand_selected)
+        ctrl2.addWidget(self._expand_btn)
+
+        self._collapse_btn = QPushButton("Collapse")
+        self._collapse_btn.setProperty("class", "secondary-action")
+        self._collapse_btn.setToolTip("Collapse all children of the selected node (or entire tree)")
+        self._collapse_btn.clicked.connect(self._on_collapse_selected)
+        ctrl2.addWidget(self._collapse_btn)
+
         layout.addLayout(ctrl2)
 
         # Splitter: tree widget (top) + rule preview (bottom)
@@ -1410,7 +1423,7 @@ class AccessibilityInspectorDialog(QMainWindow):
     # ------------------------------------------------------------------
 
     def _apply_text_filter(self, text: str):
-        """Show/hide tree items based on text filter."""
+        """Show/hide tree items based on text filter and scroll to the first match."""
         needle = text.strip().lower()
 
         if not needle:
@@ -1418,7 +1431,8 @@ class AccessibilityInspectorDialog(QMainWindow):
             self._match_count_label.clear()
             return
 
-        match_count = self._filter_tree_item(
+        first_match: Optional[QTreeWidgetItem] = None
+        match_count, first_match = self._filter_tree_item(
             self._tree_widget.invisibleRootItem(), needle
         )
         self._match_count_label.setText(
@@ -1426,34 +1440,76 @@ class AccessibilityInspectorDialog(QMainWindow):
             if match_count else "No matches"
         )
 
+        if first_match is not None:
+            self._tree_widget.scrollToItem(
+                first_match, QAbstractItemView.ScrollHint.PositionAtCenter
+            )
+            self._tree_widget.setCurrentItem(first_match)
+
     def _set_all_visible(self, item: QTreeWidgetItem, visible: bool):
         for i in range(item.childCount()):
             child = item.child(i)
             child.setHidden(not visible)
             self._set_all_visible(child, visible)
 
-    def _filter_tree_item(self, item: QTreeWidgetItem, needle: str) -> int:
+    def _filter_tree_item(
+        self, item: QTreeWidgetItem, needle: str
+    ) -> Tuple[int, Optional[QTreeWidgetItem]]:
         """Recursively filter: show items that match or have matching
-        descendants.  Returns the number of direct matches.
+        descendants.  Returns ``(match_count, first_matching_item)``.
         """
         total = 0
+        first: Optional[QTreeWidgetItem] = None
         for i in range(item.childCount()):
             child = item.child(i)
             text_cols = " ".join(
                 (child.text(c) or "") for c in range(child.columnCount())
             ).lower()
             is_match = needle in text_cols
-            child_matches = self._filter_tree_item(child, needle)
+            child_count, child_first = self._filter_tree_item(child, needle)
 
-            if is_match or child_matches > 0:
+            if is_match or child_count > 0:
                 child.setHidden(False)
                 if is_match:
                     child.setExpanded(True)
                     total += 1
-                total += child_matches
+                    if first is None:
+                        first = child
+                if first is None and child_first is not None:
+                    first = child_first
+                total += child_count
             else:
                 child.setHidden(True)
-        return total
+        return total, first
+
+    # ------------------------------------------------------------------
+    # Expand / collapse helpers
+    # ------------------------------------------------------------------
+
+    def _on_expand_selected(self):
+        """Expand all children under the selected node, or the entire tree."""
+        item = self._tree_widget.currentItem()
+        if item is not None:
+            self._set_expanded_recursive(item, True)
+        else:
+            self._tree_widget.expandAll()
+
+    def _on_collapse_selected(self):
+        """Collapse all children under the selected node, or the entire tree."""
+        item = self._tree_widget.currentItem()
+        if item is not None:
+            self._set_expanded_recursive(item, False)
+        else:
+            self._tree_widget.collapseAll()
+
+    @staticmethod
+    def _set_expanded_recursive(item: QTreeWidgetItem, expanded: bool):
+        """Set expanded state on *item* and all of its descendants."""
+        item.setExpanded(expanded)
+        for i in range(item.childCount()):
+            AccessibilityInspectorDialog._set_expanded_recursive(
+                item.child(i), expanded
+            )
 
     # ------------------------------------------------------------------
     # Step management (rule builder)

@@ -7,7 +7,8 @@
   "client_settings": {
     "export_directory": "",
     "default_source": "manual",
-    "skipped_update_version": ""
+    "skipped_update_version": "",
+    "new_opens_window": false
   },
   "google_calendar": {
     "enabled": false,
