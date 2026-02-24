@@ -1,0 +1,39 @@
+{
+  "display_name": "Google Meet",
+  "command_paths": [
+    "/Applications/Prisma Access Browser.app/Contents/MacOS/Prisma Access Browser",
+  ],
+  "transcript_search_paths": [
+    {
+      "path_name": "Window Path",
+      "steps": [
+        {
+          "role": "AXWindow",
+          "title_contains": "Meet",
+          "search_scope": {
+            "levels_deep": 1
+          }
+        },
+        {
+          "role": "AXGroup",
+          "description_contains": "Captions",
+          "search_scope": {
+            "levels_deep": 20
+          }
+        }
+      ]
+    }
+  ],
+  "traversal_roles_to_skip": [
+    "AXImage",
+    "AXButton"
+  ],
+  "traversal_mode": "dfs",
+  "serialization_text_element_roles": {
+    "AXStaticText": "AXValue",
+    "AXCell": "AXDescription"
+  },
+  "serialization_export_depth": 15,
+  "serialization_save_json": false,
+  "monitor_interval_seconds": 30
+}
