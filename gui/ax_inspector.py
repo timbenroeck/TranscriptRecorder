@@ -160,6 +160,20 @@ def _exe_for_pid(pid: int) -> str:
         return ""
 
 
+def _proc_name_for_pid(pid: int) -> str:
+    """Return the process name for *pid* via psutil, or empty string.
+
+    This is the value that ``app_names`` in source.json matches against.
+    """
+    try:
+        proc = psutil.Process(pid)
+        return proc.name() or ""
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return ""
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Rule generation
 # ---------------------------------------------------------------------------
@@ -321,7 +335,7 @@ def _sync_search_descendants(
         return matches
     effective = levels if levels > 0 else 50
     queue: deque = deque([(start_node, 0)])
-    visited: set = {id(start_node)}
+    visited: set = {start_node}
     while queue:
         elem, depth = queue.popleft()
         if depth > effective:
@@ -334,9 +348,8 @@ def _sync_search_descendants(
                 continue
             children = _ax_get(elem, kAXChildrenAttribute) or []
             for child in children:
-                cid = id(child)
-                if cid not in visited:
-                    visited.add(cid)
+                if child not in visited:
+                    visited.add(child)
                     queue.append((child, depth + 1))
     return matches
 
@@ -487,7 +500,7 @@ class _ProcessListWorker(QThread):
                 except Exception:
                     pass
 
-            results: List[Tuple[int, str, str, str]] = []
+            results: List[Tuple[int, str, str, str, str]] = []
 
             for pid, titles in window_map.items():
                 if pid <= 1:
@@ -495,8 +508,9 @@ class _ProcessListWorker(QThread):
                 owner = owner_names.get(pid, "")
                 titles_str = " | ".join(dict.fromkeys(titles))
                 exe = _exe_for_pid(pid)
+                proc_name = _proc_name_for_pid(pid)
                 display_name = owner or os.path.basename(exe) or str(pid)
-                results.append((pid, display_name, titles_str, exe))
+                results.append((pid, display_name, titles_str, exe, proc_name))
 
             results.sort(key=lambda r: r[1].lower())
             self.finished.emit(results)
@@ -717,6 +731,7 @@ class AccessibilityInspectorDialog(QMainWindow):
         self._current_pid: Optional[int] = None
         self._current_app_name: str = ""
         self._current_exe: str = ""
+        self._current_proc_name: str = ""
         self._current_tree: Optional[dict] = None
         self._current_node_count: int = 0
         self._all_processes: List[Tuple[int, str, str, str]] = []
@@ -785,17 +800,19 @@ class AccessibilityInspectorDialog(QMainWindow):
 
         layout.addLayout(search_row)
 
-        self._proc_table = QTableWidget(0, 4)
+        self._proc_table = QTableWidget(0, 5)
         self._proc_table.setHorizontalHeaderLabels(
-            ["App Name", "Window Titles", "PID", "Command Path"]
+            ["App Name", "Window Titles", "PID", "Process Name", "Command Path"]
         )
         hdr = self._proc_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         hdr.resizeSection(0, 160)
-        hdr.resizeSection(3, 240)
+        hdr.resizeSection(3, 180)
+        hdr.resizeSection(4, 240)
         self._proc_table.verticalHeader().setVisible(False)
         self._proc_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._proc_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -847,6 +864,14 @@ class AccessibilityInspectorDialog(QMainWindow):
         )
         header_row.addWidget(self._tree_heading, stretch=1)
         layout.addLayout(header_row)
+
+        self._proc_info_label = QLabel("")
+        self._proc_info_label.setObjectName("secondary_label")
+        self._proc_info_label.setWordWrap(True)
+        self._proc_info_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self._proc_info_label)
 
         # Controls row 1: depth + roles to skip + fetch
         ctrl1 = QHBoxLayout()
@@ -1170,15 +1195,17 @@ class AccessibilityInspectorDialog(QMainWindow):
 
     def _populate_process_table(self, results: list):
         self._proc_table.setRowCount(0)
-        for row_idx, (pid, display_name, titles_str, exe) in enumerate(results):
+        for row_idx, (pid, display_name, titles_str, exe, proc_name) in enumerate(results):
             self._proc_table.insertRow(row_idx)
             name_item = QTableWidgetItem(display_name)
             name_item.setData(Qt.ItemDataRole.UserRole, pid)
             name_item.setData(Qt.ItemDataRole.UserRole + 1, exe)
+            name_item.setData(Qt.ItemDataRole.UserRole + 2, proc_name)
             self._proc_table.setItem(row_idx, 0, name_item)
             self._proc_table.setItem(row_idx, 1, QTableWidgetItem(titles_str))
             self._proc_table.setItem(row_idx, 2, QTableWidgetItem(str(pid)))
-            self._proc_table.setItem(row_idx, 3, QTableWidgetItem(exe))
+            self._proc_table.setItem(row_idx, 3, QTableWidgetItem(proc_name))
+            self._proc_table.setItem(row_idx, 4, QTableWidgetItem(exe))
 
     def _apply_process_filter(self, text: str):
         needle = text.strip().lower()
@@ -1189,7 +1216,8 @@ class AccessibilityInspectorDialog(QMainWindow):
             entry for entry in self._all_processes
             if (needle in entry[1].lower()
                 or needle in entry[2].lower()
-                or needle in entry[3].lower())
+                or needle in entry[3].lower()
+                or needle in entry[4].lower())
         ]
         self._populate_process_table(filtered)
 
@@ -1208,11 +1236,23 @@ class AccessibilityInspectorDialog(QMainWindow):
         pid = name_item.data(Qt.ItemDataRole.UserRole)
         app_name = name_item.text()
         exe = name_item.data(Qt.ItemDataRole.UserRole + 1) or ""
+        proc_name = name_item.data(Qt.ItemDataRole.UserRole + 2) or ""
 
         self._current_pid = pid
         self._current_app_name = app_name
         self._current_exe = exe
+        self._current_proc_name = proc_name
         self._tree_heading.setText(f"Accessibility Tree \u2014 {app_name} (PID {pid})")
+        self._proc_info_label.setText(
+            f"Process Name: {proc_name}    Command Path: {exe}"
+        )
+        self._proc_info_label.setToolTip(
+            f"Process Name (app_names): {proc_name}\n"
+            f"Command Path (command_paths): {exe}\n\n"
+            "These values are used in source.json to identify the application.\n"
+            "If command_paths doesn't match (e.g. code-sign clones),\n"
+            "add app_names to match by process name instead."
+        )
         self._stack.setCurrentIndex(1)
         self._fetch_tree()
 
@@ -1228,6 +1268,7 @@ class AccessibilityInspectorDialog(QMainWindow):
         self._add_step_btn.setEnabled(False)
         self._text_filter.clear()
         self._match_count_label.clear()
+        self._proc_info_label.clear()
         self._on_clear_steps()
         self._test_status_label.clear()
 
@@ -1517,6 +1558,7 @@ class AccessibilityInspectorDialog(QMainWindow):
         rule: Dict[str, Any] = {
             "display_name": self._current_app_name,
             "command_paths": [self._current_exe] if self._current_exe else [],
+            "app_names": [self._current_proc_name] if self._current_proc_name else [],
             "transcript_search_paths": [
                 {
                     "path_name": "Inspector Generated Path",

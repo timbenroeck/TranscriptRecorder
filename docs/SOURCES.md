@@ -90,6 +90,7 @@ The folder name (e.g. `zoom`, `msteams`) is the **source key** — a unique iden
 |-------|------|----------|---------|-------------|
 | `display_name` | string | **Yes** | — | Name shown in the application dropdown |
 | `command_paths` | array | **Yes** | — | Filesystem paths to the application's executable. Used to detect if the app is running. |
+| `app_names` | array | No | `[]` | Process names to match against (via `psutil`). Used as a fallback when `command_paths` don't match — e.g. when macOS runs the app from a code-sign clone path. The Accessibility Inspector's **Process Name** column shows the value to use here. |
 | `transcript_search_paths` | array | **Yes** | — | Ordered list of search paths to locate the transcript element (see below) |
 | `traversal_mode` | string | No | `"bfs"` | Tree search strategy: `"bfs"` (breadth-first) or `"dfs"` (depth-first) |
 | `traversal_roles_to_skip` | array | No | `[]` | AX roles to skip during tree traversal (e.g. `"AXButton"`, `"AXImage"`) |
@@ -289,12 +290,13 @@ Only sources explicitly listed in the `"sources"` array are included in the buil
 
 Transcript Recorder includes a built-in **Accessibility Inspector** (Sources > Accessibility Inspector) that helps you build `transcript_search_paths` without needing Xcode:
 
-1. **Select a running application** from the process list.
-2. **Browse the accessibility tree** — adjust the fetch depth and expand nodes to explore the UI structure.
-3. **Build search steps incrementally** — select a node (e.g. the transcript window) and click **Add Step** to add it to the search path. Then find the transcript table and add it as another step. Each step is calculated relative to the previous one.
-4. **Configure serialization settings** — switch to the **Test Export** tab to set the export depth, traversal mode (BFS/DFS), roles to skip, and text element roles (the mapping of AX roles to attributes like `AXTextArea → AXValue`).
-5. **Test the export** — click **Test Export** to run the full pipeline live: the inspector walks the configured steps to find the transcript element, then extracts text using your serialization settings. The results appear immediately so you can verify the output matches what you expect.
-6. **Copy the generated rule** — switch to the **Rule JSON** tab to see the complete `source.json` content, ready to copy and paste.
+1. **Select a running application** from the process list. The table shows the **App Name**, **Window Titles**, **PID**, **Process Name** (the `psutil` name — use this for `app_names`), and **Command Path** (the executable path — use this for `command_paths`).
+2. **Review process identification info** — after selecting an app and clicking Inspect, the tree panel header shows the **Process Name** and **Command Path**. If the command path looks unusual (e.g. `/private/var/folders/...` instead of `/Applications/...`), this means macOS is running the app from a code-sign clone. In that case, use `app_names` in your source.json instead of (or in addition to) `command_paths`.
+3. **Browse the accessibility tree** — adjust the fetch depth and expand nodes to explore the UI structure.
+4. **Build search steps incrementally** — select a node (e.g. the transcript window) and click **Add Step** to add it to the search path. Then find the transcript table and add it as another step. Each step is calculated relative to the previous one.
+5. **Configure serialization settings** — switch to the **Test Export** tab to set the export depth, traversal mode (BFS/DFS), roles to skip, and text element roles (the mapping of AX roles to attributes like `AXTextArea → AXValue`).
+6. **Test the export** — click **Test Export** to run the full pipeline live: the inspector walks the configured steps to find the transcript element, then extracts text using your serialization settings. The results appear immediately so you can verify the output matches what you expect.
+7. **Copy the generated rule** — switch to the **Rule JSON** tab to see the complete `source.json` content (including both `command_paths` and `app_names`), ready to copy and paste.
 
 The inspector also supports filtering by role and searching for elements containing specific text, which is useful for large accessibility trees.
 

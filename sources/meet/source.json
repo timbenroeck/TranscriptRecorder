@@ -3,15 +3,25 @@
   "command_paths": [
     "/Applications/Prisma Access Browser.app/Contents/MacOS/Prisma Access Browser"
   ],
+  "app_names": [
+    "Prisma Access Browser"
+  ],
   "transcript_search_paths": [
     {
       "path_name": "Captions Search Path",
       "steps": [
         {
+          "role": "AXWindow",
+          "title_contains": "Meet",
+          "search_scope": {
+            "levels_deep": 1
+          }
+        },
+        {
           "role": "AXGroup",
           "description_contains": "Captions",
           "search_scope": {
-            "levels_deep": 30
+            "levels_deep": 50
           }
         }
       ]

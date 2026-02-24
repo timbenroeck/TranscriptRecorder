@@ -125,6 +125,7 @@ A `source.json` defines:
 |-------|-------------|
 | `display_name` | Name shown in the application dropdown |
 | `command_paths` | Paths to detect if the application is running |
+| `app_names` | Process names to detect the application (fallback when `command_paths` don't match, e.g. code-sign clones) |
 | `transcript_search_paths` | Search paths to locate the transcript UI element |
 | `traversal_mode` | `bfs` (breadth-first) or `dfs` (depth-first) search |
 | `traversal_roles_to_skip` | Accessibility roles to skip during traversal |
@@ -434,7 +435,8 @@ See [Granting Accessibility Permissions](#granting-accessibility-permissions) ab
 - Verify the meeting app is **running**
 - Check that the `command_paths` in the source match your installation
 - Some apps (like Teams) may run from different paths depending on how they were installed
-- Use **Sources → Edit Source...** to update the command paths
+- On macOS, some apps use **code-sign clones** that run from a temporary path (e.g. `/private/var/folders/...`) instead of `/Applications/`. If `command_paths` don't match, add `app_names` with the process name (visible in the **Accessibility Inspector** process list)
+- Use **Sources → Edit Source...** to update the command paths or app names
 
 ### Tools not appearing
 
