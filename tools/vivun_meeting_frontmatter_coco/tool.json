@@ -10,7 +10,7 @@
     {
       "flag": "-b",
       "label": "Meetings Base Directory",
-      "default": "~/Documents/obsidian_vaults/work/Meetings",
+      "default": "/Users/tbenroeck/Documents/obsidian_vaults/snowflake/Meetings",
       "required": true
     },
     {
