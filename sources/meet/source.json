@@ -5,7 +5,7 @@
   ],
   "transcript_search_paths": [
     {
-      "path_name": "Direct Captions Search",
+      "path_name": "Captions Search Path",
       "steps": [
         {
           "role": "AXGroup",
