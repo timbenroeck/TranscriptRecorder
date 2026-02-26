@@ -44,8 +44,9 @@ from gui.workers import (
     UpdateCheckWorker, ToolFetchWorker, CalendarFetchWorker,
     STREAM_PARSERS, _stream_parser_raw, strip_ansi,
 )
+from gui.chat_widget import MeetingChatWidget
 from gui.dialogs import LogViewerDialog, PermissionsDialog, ThemedMessageDialog, WelcomeDialog
-from gui.tool_dialogs import ToolImportDialog, ToolJsonEditorDialog
+from gui.tool_dialogs import ChatConfigEditorDialog, ToolImportDialog, ToolJsonEditorDialog
 from gui.data_editors import DataFileEditorDialog
 from gui.calendar_integration import (
     _HAS_GOOGLE, CalendarConfig, calendar_config_from_dict,
@@ -70,6 +71,18 @@ class DropDownComboBox(QComboBox):
             # Anchor the popup top-left to the combo box bottom-left
             below = self.mapToGlobal(QPoint(0, self.height()))
             popup.move(below)
+
+
+def _deep_merge_defaults(defaults: dict, user: dict) -> dict:
+    """Recursively merge *defaults* into *user* config, adding missing keys
+    without overwriting existing user values."""
+    merged = dict(user)
+    for key, default_value in defaults.items():
+        if key not in merged:
+            merged[key] = default_value
+        elif isinstance(default_value, dict) and isinstance(merged[key], dict):
+            merged[key] = _deep_merge_defaults(default_value, merged[key])
+    return merged
 
 
 class TranscriptRecorderApp(QMainWindow):
@@ -647,6 +660,14 @@ class TranscriptRecorderApp(QMainWindow):
         
         self.tab_widget.addTab(tools_tab, "Meeting Tools")
         
+        # --- Meeting Chat Tab ---
+        self._chat_widget = MeetingChatWidget(
+            transcript_accessor=lambda: self.transcript_text.toPlainText(),
+            is_dark_fn=self._is_dark_mode,
+            recording_path_fn=lambda: self.current_recording_path,
+        )
+        self.tab_widget.addTab(self._chat_widget, "Meeting Chat")
+        
         main_layout.addWidget(self.tab_widget, stretch=1)
         
         # === Separator before status bar ===
@@ -957,6 +978,21 @@ class TranscriptRecorderApp(QMainWindow):
         refresh_sources_action.triggered.connect(self._scan_sources)
         sources_menu.addAction(refresh_sources_action)
         
+        # Chat menu
+        chat_menu = menubar.addMenu("Chat")
+
+        chat_edit_config_action = QAction("Edit Chat Config...", self)
+        chat_edit_config_action.setMenuRole(QAction.MenuRole.NoRole)
+        chat_edit_config_action.triggered.connect(self._on_chat_edit_config)
+        chat_menu.addAction(chat_edit_config_action)
+
+        chat_menu.addSeparator()
+
+        chat_save_action = QAction("Save Chat", self)
+        chat_save_action.setMenuRole(QAction.MenuRole.NoRole)
+        chat_save_action.triggered.connect(self._on_chat_save)
+        chat_menu.addAction(chat_save_action)
+
         # Integrations menu
         integrations_menu = menubar.addMenu("Integrations")
 
@@ -1087,7 +1123,18 @@ class TranscriptRecorderApp(QMainWindow):
             
             with open(CONFIG_PATH, 'r') as f:
                 self.config = json.load(f)
-                
+
+            bundled_cfg_path = resource_path("config.json")
+            if bundled_cfg_path.exists() and bundled_cfg_path != CONFIG_PATH:
+                with open(bundled_cfg_path, 'r', encoding='utf-8') as f:
+                    bundled = json.load(f)
+                merged = _deep_merge_defaults(bundled, self.config)
+                if merged != self.config:
+                    self.config = merged
+                    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                        json.dump(self.config, f, indent=2, ensure_ascii=False)
+                    logger.info("Config: merged new default keys from bundled config")
+
             # Set export directory (blank means user must pick one)
             client_settings = self.config.get("client_settings", {})
             export_dir = client_settings.get("export_directory", "").strip()
@@ -1129,6 +1176,9 @@ class TranscriptRecorderApp(QMainWindow):
             
             # Load Google Calendar integration config
             self._load_calendar_config()
+            
+            # Load Chat config
+            self._load_chat_config()
             
             log_level = self.config.get("logging", {}).get("level", "INFO")
             file_sources = len(self._discovered_sources) - 1  # subtract built-in Manual Recording
@@ -1646,6 +1696,10 @@ class TranscriptRecorderApp(QMainWindow):
             "Tool output will appear here."
         )
         
+        # Reset Meeting Chat
+        self._chat_widget.clear_chat()
+        self._chat_widget.refresh_sessions_dropdown()
+        
         # Switch back to Meeting Details tab
         self.tab_widget.setCurrentIndex(0)
         
@@ -1851,6 +1905,7 @@ class TranscriptRecorderApp(QMainWindow):
                     self._set_status(f"Transcript: {total_lines} lines (+{delta} new)", "info")
                 else:
                     self._set_status(f"Transcript: {total_lines} lines", "info")
+                self._chat_widget.notify_transcript_changed()
             else:
                 logger.warning(f"{source} capture: no transcript data returned")
                 if not auto:
@@ -4385,6 +4440,76 @@ class TranscriptRecorderApp(QMainWindow):
             )
             self.statusBar().showMessage("Update download failed")
         
+    # ------------------------------------------------------------------
+    # Meeting Chat configuration
+    # ------------------------------------------------------------------
+
+    def _load_chat_config(self):
+        """Load chat settings from config and apply them to the widget."""
+        if not self.config:
+            return
+        chat_cfg = self.config.get("chat", {})
+        system_prompt = chat_cfg.get(
+            "system_prompt",
+            "You are a helpful assistant analyzing a meeting transcript. "
+            "Respond in well-formatted markdown. Be concise and specific.")
+        connection = chat_cfg.get("cortex_connection", "")
+        model = chat_cfg.get("model", "")
+        cli_binary = chat_cfg.get("cli_binary", "cortex")
+        cli_extra_args = chat_cfg.get("cli_extra_args", [])
+        assistant_name = chat_cfg.get("assistant_name", "Assistant")
+        export_dir = chat_cfg.get("chat_export_directory", "")
+        auto_save = chat_cfg.get("auto_save", False)
+        chat_logging = chat_cfg.get("chat_logging", False)
+        max_history = chat_cfg.get("max_history_messages", 5)
+        prompts = chat_cfg.get("prompts", [])
+
+        self._chat_widget.set_system_prompt(system_prompt)
+        self._chat_widget.set_connection(connection)
+        self._chat_widget.set_model(model)
+        self._chat_widget.set_cli_binary(cli_binary)
+        self._chat_widget.set_cli_extra_args(
+            cli_extra_args if isinstance(cli_extra_args, list) else [])
+        self._chat_widget.set_assistant_name(assistant_name)
+        self._chat_widget.set_chat_export_directory(export_dir)
+        self._chat_widget.set_auto_save(auto_save)
+        self._chat_widget.set_chat_logging(chat_logging)
+        self._chat_widget.set_max_history(max_history)
+        self._chat_widget.set_prompts(
+            prompts if isinstance(prompts, list) else [])
+        self._chat_widget.refresh_sessions_dropdown()
+        logger.info(f"Chat: binary={cli_binary}, model={model or 'auto'}, "
+                    f"connection={connection or '(default)'}, "
+                    f"assistant={assistant_name}, "
+                    f"auto_save={auto_save}, logging={chat_logging}, "
+                    f"max_history={max_history}, "
+                    f"prompts={len(prompts) if isinstance(prompts, list) else 0}")
+
+    def _on_chat_edit_config(self):
+        """Open the chat config JSON editor dialog."""
+        self._chat_config_editor = ChatConfigEditorDialog(CONFIG_PATH, self)
+        self._chat_config_editor.config_saved.connect(self._on_chat_config_saved)
+        self._chat_config_editor.show()
+
+    def _on_chat_config_saved(self):
+        """Reload config from disk and re-apply chat settings."""
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                self.config = json.load(f)
+        except Exception as e:
+            logger.error(f"Chat config reload failed: {e}")
+            return
+        self._load_chat_config()
+        self.statusBar().showMessage("Chat configuration saved and applied")
+
+    def _on_chat_save(self):
+        """Save the current chat to the recording directory."""
+        path = self._chat_widget.save_chat()
+        if path:
+            self.statusBar().showMessage(f"Chat saved to {path.name}")
+        else:
+            self.statusBar().showMessage("Nothing to save (no messages or no recording)")
+
     def closeEvent(self, event):
         """Handle window close."""
         if self.is_recording:
@@ -4397,6 +4522,10 @@ class TranscriptRecorderApp(QMainWindow):
                 return
             self._on_stop_recording()
             
+        # Clean up chat worker before closing
+        if self._chat_widget.is_chat_running():
+            self._chat_widget.clear_chat()
+
         if hasattr(self, 'tray_icon'):
             self.tray_icon.hide()
         

@@ -457,4 +457,177 @@ def get_application_stylesheet(is_dark: bool, combo_arrow_path: str = "") -> str
             background-color: transparent;
             color: {status_info_text};
         }}
+
+        /* ========== Meeting Chat ========== */
+
+        QComboBox#chat_selector {{
+            border: 1px solid {border};
+            border-radius: 4px;
+            padding: 4px 8px;
+            background-color: {bg_widget};
+            color: {text_main};
+            font-size: 12px;
+        }}
+
+        QScrollArea#chat_scroll_area {{
+            border: none;
+            background-color: {bg_window};
+        }}
+        QWidget#chat_history_container {{
+            background-color: {bg_window};
+        }}
+
+        /* User message bubble */
+        QFrame#chat_bubble_user {{
+            background-color: {accent_blue_subtle};
+            border: 1px solid {accent_blue};
+            border-radius: 8px;
+        }}
+
+        /* Assistant message bubble */
+        QFrame#chat_bubble_assistant {{
+            background-color: {bg_widget};
+            border: 1px solid {border};
+            border-radius: 8px;
+        }}
+
+        /* Role label inside bubbles */
+        QLabel#chat_role_label {{
+            background-color: transparent;
+            color: {text_sec};
+            font-size: 11px;
+        }}
+
+        /* Prompts dropdown in the chat input area */
+        QComboBox#chat_prompts_combo {{
+            font-size: 12px;
+        }}
+
+        /* Thinking toggle button */
+        QPushButton#chat_thinking_toggle {{
+            text-align: left;
+            font-size: 11px;
+            padding: 2px 0;
+            color: {text_sec};
+            background: transparent;
+            border: none;
+        }}
+        QPushButton#chat_thinking_toggle:hover {{
+            color: {accent_blue};
+        }}
+
+        /* Thinking content area */
+        QTextBrowser#chat_thinking_content {{
+            background-color: {"rgba(255,255,255,0.03)" if is_dark else "rgba(0,0,0,0.03)"};
+            border: 1px solid {border};
+            border-radius: 4px;
+            color: {text_sec};
+            font-size: 11px;
+            padding: 6px;
+        }}
+
+        /* Transcript toggle button (user bubbles) */
+        QPushButton#chat_transcript_toggle {{
+            text-align: left;
+            font-size: 11px;
+            padding: 2px 0;
+            color: {text_sec};
+            background: transparent;
+            border: none;
+        }}
+        QPushButton#chat_transcript_toggle:hover {{
+            color: {accent_blue};
+        }}
+
+        /* Transcript content area (user bubbles) */
+        QTextBrowser#chat_transcript_content {{
+            background-color: {"rgba(255,255,255,0.03)" if is_dark else "rgba(0,0,0,0.03)"};
+            border: 1px solid {border};
+            border-radius: 4px;
+            color: {text_sec};
+            font-size: 11px;
+            padding: 6px;
+        }}
+
+        /* System prompt banner */
+        QFrame#system_prompt_banner {{
+            background-color: {"rgba(122, 162, 255, 0.06)" if is_dark else "rgba(74, 103, 173, 0.04)"};
+            border: 1px solid {border};
+            border-radius: 6px;
+        }}
+        QPushButton#chat_system_prompt_toggle {{
+            text-align: left;
+            font-size: 11px;
+            padding: 2px 0;
+            color: {text_sec};
+            background: transparent;
+            border: none;
+        }}
+        QPushButton#chat_system_prompt_toggle:hover {{
+            color: {accent_blue};
+        }}
+        QTextBrowser#chat_system_prompt_content {{
+            background-color: {"rgba(255,255,255,0.03)" if is_dark else "rgba(0,0,0,0.03)"};
+            border: 1px solid {border};
+            border-radius: 4px;
+            color: {text_sec};
+            font-size: 11px;
+            padding: 6px;
+        }}
+
+        /* Main content browser inside bubbles */
+        QTextBrowser#chat_content {{
+            background-color: transparent;
+            border: none;
+            color: {text_main};
+            padding: 0;
+        }}
+
+        /* Copy button on assistant bubbles */
+        QPushButton#chat_copy_btn {{
+            background: transparent;
+            border: none;
+            padding: 2px;
+        }}
+        QPushButton#chat_copy_btn:hover {{
+            background: {hover_bg};
+            border-radius: 4px;
+        }}
+
+        /* Chat input frame */
+        QFrame#chat_input_frame {{
+            background-color: {bg_widget};
+            border-top: 1px solid {border};
+            border-radius: 0;
+        }}
+
+        /* Chat button bar */
+        QFrame#chat_btn_bar {{
+            border: 1px solid {border};
+            border-radius: 4px;
+        }}
+
+        /* QMenu popup (transcript dropdown, etc.) */
+        QMenu {{
+            background-color: {bg_widget};
+            color: {text_main};
+            border: 1px solid {border};
+            border-radius: 6px;
+            padding: 4px 0;
+        }}
+        QMenu::item {{
+            padding: 6px 24px 6px 12px;
+        }}
+        QMenu::item:selected {{
+            background-color: {accent_blue};
+            color: white;
+        }}
+        QMenu::item:disabled {{
+            color: {disabled_text};
+        }}
+        QMenu::separator {{
+            height: 1px;
+            background: {border};
+            margin: 4px 8px;
+        }}
     """

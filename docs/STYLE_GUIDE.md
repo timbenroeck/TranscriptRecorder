@@ -14,6 +14,7 @@ This document is the single source of truth for every colour, button class, icon
 | `gui/styles.py` | All QSS (Qt Style Sheets) — palette variables, widget rules, button classes, status bar tints. |
 | `gui/icons.py` | SVG icon registry (`_SVG_SOURCES`), tint colour map (`_TINTS`), and the `IconManager` rendering pipeline. |
 | `gui/main_window.py` | Widget construction — assigns `class` properties to buttons, connects signals, sets tooltips. |
+| `gui/chat_widget.py` | Meeting Chat tab — message bubbles, thinking blocks, markdown rendering, input area. |
 
 ---
 
@@ -408,7 +409,73 @@ Styled as thin, macOS-native overlays.
 
 ---
 
-## 12. Making Changes
+## 12. Meeting Chat Elements
+
+The Meeting Chat tab uses chat-specific styled widgets. All QSS rules are in `gui/styles.py` under the `Meeting Chat` section. Widget construction and object names are in `gui/chat_widget.py`.
+
+### 12.1 Chat Header
+
+| Element | Object Name | Style |
+|---------|-------------|-------|
+| Chat selector | `chat_selector` | `QComboBox` — `bg_widget` bg, 1px `border`, 4px radius, 12px font. Shows "New Chat" plus previous sessions. |
+| Button bar frame | `chat_btn_bar` | 1px `palette(mid)` border, 4px radius |
+
+The header row contains the chat-selector dropdown on the left and the icon button bar on the right.
+
+### 12.2 Message Bubbles
+
+| Element | Object Name | Dark Mode | Light Mode |
+|---------|-------------|-----------|------------|
+| User bubble | `chat_bubble_user` | `accent_blue_subtle` bg, `accent_blue` border | Same (palette-aware) |
+| Assistant bubble | `chat_bubble_assistant` | `bg_widget` bg, `border` border | Same |
+| Border radius | — | 8px | 8px |
+
+The assistant role label uses the configurable `assistant_name` (default: "Assistant").
+
+### 12.3 Thinking Block
+
+| Element | Object Name | Style |
+|---------|-------------|-------|
+| Toggle button | `chat_thinking_toggle` | Flat, left-aligned, `text_sec` colour, blue on hover |
+| Content area | `chat_thinking_content` | Faint bg (`rgba(255,255,255,0.03)` dark / `rgba(0,0,0,0.03)` light), `border` border, monospace font, max-height 200px |
+
+The thinking block expands automatically during streaming and collapses once the text response begins.
+
+### 12.4 Content & Copy
+
+| Element | Object Name | Style |
+|---------|-------------|-------|
+| Content browser | `chat_content` | Transparent bg, no border, `text_main` colour |
+| Copy button | `chat_copy_btn` | Transparent bg, `hover_bg` on hover, 24×24px, uses `copy` icon. Present on **both** user and assistant bubbles. |
+| Role label | `chat_role_label` | Transparent bg, `text_sec`, 11px, DemiBold |
+| Loading label | `chat_loading_label` | Italic, `palette(mid)` colour, animated dots. Shown in assistant bubble while waiting for stream to start. |
+
+### 12.5 Button Bar
+
+A horizontal icon-only button bar in the chat header, matching the meeting-details button-bar pattern.
+
+| Element | Object Name | Icon | Tooltip |
+|---------|-------------|------|---------|
+| Button bar frame | `chat_btn_bar` | — | — |
+| Save | — | `save` | Save chat |
+| Delete | — | `trash` | Delete chat |
+| Copy All | — | `copy` | Copy entire chat to clipboard |
+| Open Folder | — | `folder_open` | Open chats folder in Finder |
+
+Style: `border: 1px solid palette(mid); border-radius: 4px;`. Buttons use transparent bg with `palette(mid)` hover.
+
+### 12.6 Input Area
+
+| Element | Object Name | Style |
+|---------|-------------|-------|
+| Input frame | `chat_input_frame` | `bg_widget` bg, top border |
+| Options row | — | Contains model label (left) and Include Transcript checkbox (right) |
+| Model label | `chat_model_label` | `text_sec`, 12px. Located in the input area above the text input. |
+| Send button | — | Uses `class="action"` (Ghost Blue, see Section 2.4) |
+
+---
+
+## 13. Making Changes
 
 ### Changing a colour
 

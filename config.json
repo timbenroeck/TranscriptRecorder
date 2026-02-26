@@ -13,5 +13,23 @@
   "google_calendar": {
     "enabled": false,
     "client_secret_path": ""
+  },
+  "chat": {
+    "system_prompt": "You are a helpful assistant analyzing a meeting transcript. Respond in well-formatted markdown. Be concise and specific.",
+    "cli_binary": "cortex",
+    "cli_extra_args": [],
+    "cortex_connection": "",
+    "model": "",
+    "assistant_name": "Cortex",
+    "chat_export_directory": "",
+    "auto_save": false,
+    "chat_logging": false,
+    "max_history_messages": 5,
+    "prompts": [
+      {
+        "label": "Summarize Technical Details",
+        "text": "Can you summarize the technical details in this meeting?"
+      }
+    ]
   }
 }

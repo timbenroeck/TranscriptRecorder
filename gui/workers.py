@@ -436,6 +436,188 @@ class StreamingToolRunnerWorker(QThread):
                 logger.error(f"StreamingToolRunnerWorker.cancel: SIGKILL failed: {exc}")
 
 
+CortexChatWorker = None  # removed — use ChatCLIWorker
+
+
+class ChatCLIWorker(QThread):
+    """Background worker that streams a single CLI chat turn.
+
+    Spawns ``<cli_binary> --output-format stream-json [-m <model>] -p "<prompt>"``
+    and emits fine-grained signals as JSON lines arrive so the UI can show
+    thinking blocks, streamed text, and tool-use status in real time.
+
+    The CLI binary and extra arguments are configurable so the same worker
+    can drive Cortex, Claude, or any CLI that speaks the Anthropic
+    stream-json protocol.
+
+    The subprocess is started in its own process group
+    (``start_new_session=True``) so :meth:`cancel` can tear down the
+    entire tree cleanly, matching the pattern used by
+    :class:`StreamingToolRunnerWorker`.
+    """
+
+    thinking_update = pyqtSignal(str)          # incremental thinking text
+    text_update = pyqtSignal(str)              # incremental response text
+    tool_use_update = pyqtSignal(str)          # tool-use status line
+    finished = pyqtSignal(str, str, str, int)  # full_thinking, full_text, stderr, exit_code
+
+    def __init__(self, prompt: str, model: str = "",
+                 connection: str = "",
+                 cli_binary: str = "cortex",
+                 cli_extra_args: Optional[List[str]] = None,
+                 parent=None):
+        super().__init__(parent)
+        self._prompt = prompt
+        self._model = model
+        self._connection = connection
+        self._cli_binary = cli_binary
+        self._cli_extra_args = cli_extra_args or []
+        self._process: Optional[subprocess.Popen] = None
+        self._cancelled = False
+
+    def run(self):
+        logger.debug("ChatCLIWorker.run: starting")
+        try:
+            env = ToolRunnerWorker._get_user_env()
+
+            cmd: List[str] = [
+                self._cli_binary,
+                "--output-format", "stream-json",
+            ]
+            if self._model:
+                cmd.extend(["-m", self._model])
+            cmd.extend(a for a in self._cli_extra_args if a)
+            if self._connection:
+                cmd.extend(["-c", self._connection])
+            cmd.extend(["-p", self._prompt])
+
+            self._process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                start_new_session=True,
+            )
+            pid = self._process.pid
+            logger.info(f"ChatCLIWorker.run: spawned pid={pid}, "
+                        f"binary={self._cli_binary}")
+
+            stderr_lines: List[str] = []
+
+            def _read_stderr():
+                try:
+                    for err_line in self._process.stderr:
+                        stderr_lines.append(err_line)
+                except Exception:
+                    pass
+
+            stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+            stderr_thread.start()
+
+            full_thinking: List[str] = []
+            full_text: List[str] = []
+
+            for line in self._process.stdout:
+                if self._cancelled:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    cleaned = strip_ansi(line)
+                    if cleaned:
+                        full_text.append(cleaned)
+                        self.text_update.emit(cleaned)
+                    continue
+
+                msg = obj.get("message", {})
+                content_list = msg.get("content", [])
+
+                for block in content_list:
+                    block_type = block.get("type", "")
+                    if block_type == "text":
+                        text = block.get("text", "")
+                        if text:
+                            full_text.append(text)
+                            self.text_update.emit(text)
+                    elif block_type == "thinking":
+                        thinking = block.get("thinking", "")
+                        if thinking:
+                            full_thinking.append(thinking)
+                            self.thinking_update.emit(thinking)
+                    elif block_type == "tool_use":
+                        name = block.get("name", "unknown")
+                        tool_input = block.get("input", {})
+                        if name == "read":
+                            status = f"Reading {tool_input.get('file_path', '')}"
+                        elif name == "write":
+                            status = f"Writing {tool_input.get('file_path', '')}"
+                        elif name in ("bash", "shell"):
+                            status = f"Running {tool_input.get('command', '')}"
+                        elif name == "skill":
+                            status = f"Skill {tool_input.get('command', '')}"
+                        else:
+                            status = f"Tool: {name}"
+                        self.tool_use_update.emit(status)
+                    elif block_type == "tool_result":
+                        pass  # tool results are context; don't display
+
+            self._process.wait()
+            stderr_thread.join(timeout=5)
+
+            rc = self._process.returncode
+            thinking_full = "".join(full_thinking)
+            text_full = "".join(full_text)
+            stderr_full = "".join(stderr_lines)
+
+            logger.debug(f"ChatCLIWorker.run: finished pid={pid}, rc={rc}, "
+                         f"cancelled={self._cancelled}")
+
+            if self._cancelled:
+                self.finished.emit(thinking_full, text_full,
+                                   "Cancelled by user.", -2)
+            else:
+                self.finished.emit(thinking_full, text_full, stderr_full, rc)
+        except Exception as e:
+            logger.error(f"ChatCLIWorker.run: {type(e).__name__}: {e}",
+                         exc_info=True)
+            if self._cancelled:
+                self.finished.emit("", "", "Cancelled by user.", -2)
+            else:
+                self.finished.emit("", "", f"Error: {e}", -1)
+
+    def cancel(self):
+        """Kill the running subprocess and its entire process group."""
+        self._cancelled = True
+        proc = self._process
+        if proc is None:
+            return
+        pid = proc.pid
+        if proc.poll() is not None:
+            return
+        try:
+            pgid = os.getpgid(pid)
+            logger.info(f"ChatCLIWorker.cancel: SIGTERM pgid={pgid}")
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except Exception as exc:
+            logger.warning(f"ChatCLIWorker.cancel: SIGTERM failed: {exc}")
+            proc.kill()
+            return
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, Exception):
+                pass
+
+
 class UpdateCheckWorker(QThread):
     """Background worker to check for application updates without blocking the UI."""
     

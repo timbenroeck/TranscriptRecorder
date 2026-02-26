@@ -1,5 +1,6 @@
 """
-Tool management dialogs: importing tools from GitHub and editing tool.json files.
+Tool management dialogs: importing tools from GitHub, editing tool.json files,
+and editing the chat configuration section of config.json.
 """
 import json
 import shutil
@@ -447,6 +448,148 @@ class ToolJsonEditorDialog(QMainWindow):
             self._is_modified = False
             self._set_status("✓ Saved", "success")
             logger.info(f"Tool config editor: saved {self._tool_json_path}")
+            self.config_saved.emit()
+        except Exception as e:
+            ThemedMessageDialog.critical(self, "Save Error", f"Failed to save: {e}")
+
+    def closeEvent(self, event):
+        if self._is_modified:
+            if not ThemedMessageDialog.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes. Close without saving?"
+            ):
+                event.ignore()
+                return
+        event.accept()
+
+
+class ChatConfigEditorDialog(QMainWindow):
+    """A window for editing the ``chat`` section of config.json.
+
+    Modeled on :class:`ToolJsonEditorDialog` but operates on a single
+    subsection of the global config file rather than a standalone file.
+    On save the full config is re-written with the updated ``chat`` block,
+    and ``config_saved`` is emitted so the caller can reload settings.
+    """
+
+    config_saved = pyqtSignal()
+
+    def __init__(self, config_path: Path, parent=None):
+        super().__init__(parent)
+        self._config_path = config_path
+        self.setWindowTitle("Chat Configuration")
+        self.setMinimumSize(600, 450)
+        self.resize(680, 550)
+        self._is_modified = False
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        info_label = QLabel(f"Editing: {config_path}  [chat section]")
+        info_label.setObjectName("secondary_label")
+        layout.addWidget(info_label)
+
+        self.text_edit = QTextEdit()
+        self.text_edit.setFont(QFont("Menlo", 11))
+        self.text_edit.setAcceptRichText(False)
+        self.text_edit.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self.text_edit)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("dialog_status")
+        layout.addWidget(self.status_label)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        reload_btn = QPushButton("Reload")
+        reload_btn.clicked.connect(self._load)
+        btn_layout.addWidget(reload_btn)
+
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        save_btn.setProperty("class", "action")
+        save_btn.clicked.connect(self._save)
+        btn_layout.addWidget(save_btn)
+
+        validate_btn = QPushButton("Validate JSON")
+        validate_btn.setProperty("class", "secondary-action")
+        validate_btn.clicked.connect(self._validate)
+        btn_layout.addWidget(validate_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        self._load()
+
+    def _set_status(self, text: str, state: str = ""):
+        self.status_label.setText(text)
+        self.status_label.setProperty("status_state", state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
+    def _on_text_changed(self):
+        self._is_modified = True
+        self.status_label.setText("")
+
+    def _load(self):
+        try:
+            if self._config_path.exists():
+                with open(self._config_path, "r", encoding="utf-8") as f:
+                    full_config = json.load(f)
+                chat_section = full_config.get("chat", {})
+                self.text_edit.setPlainText(
+                    json.dumps(chat_section, indent=2, ensure_ascii=False))
+                self._is_modified = False
+                self.status_label.setText("")
+            else:
+                self.text_edit.setPlainText("{}")
+                self._set_status("Config file not found — starting with empty chat section.", "warn")
+        except Exception as e:
+            self.text_edit.setPlainText("{}")
+            self._set_status(f"Error loading: {e}", "error")
+
+    def _validate(self) -> bool:
+        try:
+            json.loads(self.text_edit.toPlainText())
+            self._set_status("\u2713 Valid JSON", "success")
+            return True
+        except json.JSONDecodeError as e:
+            self._set_status(f"\u2717 Invalid JSON: {e}", "error")
+            return False
+
+    def _save(self):
+        if not self._validate():
+            ThemedMessageDialog.warning(
+                self, "Invalid JSON",
+                "The chat configuration contains invalid JSON and cannot be saved. "
+                "Please fix the errors and try again."
+            )
+            return
+
+        try:
+            chat_data = json.loads(self.text_edit.toPlainText())
+
+            with open(self._config_path, "r", encoding="utf-8") as f:
+                full_config = json.load(f)
+
+            full_config["chat"] = chat_data
+            formatted_chat = json.dumps(chat_data, indent=2, ensure_ascii=False)
+
+            with open(self._config_path, "w", encoding="utf-8") as f:
+                json.dump(full_config, f, indent=2, ensure_ascii=False)
+
+            self.text_edit.setPlainText(formatted_chat)
+            self._is_modified = False
+            self._set_status("\u2713 Saved", "success")
+            logger.info("Chat config editor: saved chat section")
             self.config_saved.emit()
         except Exception as e:
             ThemedMessageDialog.critical(self, "Save Error", f"Failed to save: {e}")

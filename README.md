@@ -9,6 +9,7 @@ A macOS application that captures meeting transcripts and live captions using th
 - **Smart Merging**: Intelligently merges transcript snapshots to avoid duplicates
 - **Native macOS UI**: Modern PyQt6 interface with light/dark mode support
 - **Meeting Tools**: Run custom scripts (cleanup, summarization, etc.) against your recordings
+- **Meeting Chat**: Interactive LLM chat with configurable CLI backend (Cortex, Claude, etc.) — ask questions about your transcript with streaming responses, persistent sessions, and markdown export
 - **Sources & Tools**: Extensible source-based architecture — download or create your own
 - **Meeting Details**: Add meeting name, notes, and timestamps to your recordings
 - **Google Calendar** (optional): Populate meeting details from your Google Calendar
@@ -251,6 +252,70 @@ For long-running tools (e.g. AI/LLM calls via Cortex), set `"streaming": true` t
 
 If no output is received for `idle_warning_seconds`, the status bar shows a warning. After `idle_kill_seconds` the tool is auto-cancelled.
 
+## Meeting Chat
+
+The **Meeting Chat** tab provides an interactive LLM chat interface powered by a configurable CLI backend (Cortex, Claude, or any CLI that speaks the Anthropic stream-json protocol). Chat with an AI model about your meeting transcript directly within the app.
+
+For full technical details, see [docs/CHAT.md](docs/CHAT.md).
+
+### Features
+
+- **Configurable CLI backend**: Use Cortex, Claude, or any compatible CLI via `cli_binary` / `cli_extra_args` config
+- **Configurable system prompt**: Customize the preamble sent with every prompt
+- **Auto model**: Leave `model` blank to use the CLI's default model
+- **Prompts dropdown**: Pre-defined prompt templates (configurable in `config.json`) populate the input field with one click
+- **Persistent sessions**: Conversations are saved to JSON and can be resumed from the chat-selector dropdown
+- **Streaming responses**: See the model's output as it generates, including collapsible "Thinking" blocks and an animated waiting indicator before the stream starts
+- **Collapsible transcript in bubbles**: Each user message that included a transcript shows a collapsible section with the actual transcript text that was sent, labeled by mode (full, last N lines, update)
+- **System prompt banner**: A collapsible banner at the top of the chat shows the system prompt used for the session
+- **Markdown rendering**: Responses are rendered with headings, bold, italic, code blocks, and lists
+- **YAML frontmatter**: Exported markdown includes date, model, transcript directory, and chat ID
+- **Copy button**: Copy any message (user or assistant) to the clipboard with one click
+- **Copy entire chat**: Copy the full conversation to the clipboard via the button bar
+- **Smart transcript context**: Transcript is auto-included on the first message; a chat history indicator and always-visible Transcript dropdown let you re-include the full transcript, just new lines since the last inclusion, the last N lines of your choosing, or opt out entirely with "No Transcript" — with live capture updates, timestamps, and backups
+- **Conversation history**: Messages build on previous context (configurable sliding window embedded in each prompt)
+- **Chat logging**: Enable verbose diagnostics in the main application log for debugging CLI interactions
+- **Export directory**: Optionally write markdown to a separate location (e.g. an Obsidian vault) instead of the recording's `chats/` folder
+- **Configurable assistant name**: Change the display name from "Assistant" to anything
+- **Delete chat**: Remove a chat session and its files with confirmation
+- **Concurrent operation**: Chat runs in its own background thread — recording, tool execution, and tab switching all continue without interruption
+
+### Requirements
+
+- A compatible **CLI tool** installed and on your PATH (e.g. `cortex`, `claude`)
+- For Cortex: a configured **Snowflake connection** in `~/.snowflake/connections.toml`
+
+### Configuration
+
+Use the **Chat** menu:
+
+- **Chat → Edit Chat Config...** — Opens a JSON editor for the `chat` section of `config.json`. All settings (CLI binary, model, system prompt, assistant name, export directory, auto-save, logging) are edited here.
+- **Chat → Save Chat** — Save the current conversation to a markdown file in the recording's `chats/` folder.
+
+Settings are persisted to `config.json` under the `chat` section.
+
+### Chat Sessions
+
+The chat-selector dropdown at the top of the tab shows "New Chat" plus any previous sessions for the current recording. Selecting a previous session reloads the conversation and lets you continue from where you left off. Sessions are persisted in `chats/sessions/<id>.json` and tracked in `chats/chats.json`.
+
+### Saving Chats
+
+Chat conversations are saved as markdown files with YAML frontmatter in the recording's `chats/` subfolder. Use the **Save** icon in the button bar or **Chat → Save Chat**, or set `auto_save: true` in the chat config to save after each response. The button bar also provides **Delete** (removes the current session with confirmation), **Copy All**, and **Open Folder** (opens chats directory in Finder).
+
+If a `chat_export_directory` is configured, the markdown file is written there instead of the recording's `chats/` folder.
+
+### Usage
+
+1. **Load a recording** (New or History) so a transcript is available
+2. Switch to the **Meeting Chat** tab
+3. Select "New Chat" from the dropdown (or resume a previous session)
+4. Type your question (e.g. "What were the key decisions from this meeting?")
+5. The transcript is automatically included with the first message — the chat history indicator above the input area shows its status
+6. Press **Enter** or click **Send** to submit
+7. Watch the streaming response with thinking blocks and formatted markdown
+8. Ask follow-up questions — conversation context is preserved
+9. Use the button bar to **Save**, **Delete**, **Copy All**, or open the **chats folder**
+
 ## Google Calendar Integration (Optional)
 
 Transcript Recorder can optionally integrate with Google Calendar to populate meeting details (date/time, name, attendees, description) from your calendar events. When configured, a calendar button appears in the Meeting Details button bar — click it to browse events and select one to fill in the meeting fields. Events are pre-fetched in the background on launch so the dialog opens instantly.
@@ -317,6 +382,19 @@ The application configuration is stored at `~/Library/Application Support/Transc
   "google_calendar": {
     "enabled": false,
     "client_secret_path": ""
+  },
+  "chat": {
+    "system_prompt": "You are a helpful assistant analyzing a meeting transcript. Respond in well-formatted markdown. Be concise and specific.",
+    "cli_binary": "cortex",
+    "cli_extra_args": [],
+    "cortex_connection": "",
+    "model": "",
+    "assistant_name": "Cortex",
+    "chat_export_directory": "",
+    "auto_save": false,
+    "chat_logging": false,
+    "max_history_messages": 5,
+    "prompts": [{"label": "Summarize Technical Details", "text": "Can you summarize the technical details in this meeting"}]
   }
 }
 ```
@@ -332,6 +410,17 @@ The application configuration is stored at `~/Library/Application Support/Transc
 | `client_settings.new_opens_window` | When `true`, pressing New while a session is active opens a new window instead of replacing the session |
 | `google_calendar.enabled` | Enable/disable the Google Calendar integration |
 | `google_calendar.client_secret_path` | Path to your Google OAuth `client_secret.json` file |
+| `chat.system_prompt` | System preamble prepended to every chat prompt |
+| `chat.cli_binary` | CLI executable name (default: `cortex`). Any CLI supporting `-p`, `--output-format stream-json` |
+| `chat.cli_extra_args` | Additional CLI flags as a JSON array |
+| `chat.cortex_connection` | Connection name passed via `-c` (blank = default connection) |
+| `chat.model` | LLM model identifier (blank = CLI default) |
+| `chat.assistant_name` | Display name for the assistant in chat bubbles and exported markdown |
+| `chat.chat_export_directory` | Directory for markdown files (blank = recording's `chats/` folder) |
+| `chat.auto_save` | When `true`, automatically save the chat after each assistant response |
+| `chat.chat_logging` | When `true`, emit verbose chat diagnostics to the main application log |
+| `chat.max_history_messages` | Number of recent messages included in each prompt (default: 5) |
+| `chat.prompts` | Array of `{label, text}` prompt templates shown in the Prompts dropdown |
 
 You can change the log level from **Maintenance → Log Level** without editing the file. Use **Maintenance → Change Export Directory...** to move your export location. Use **Calendar → Setup Google Calendar** to set up Google Calendar integration.
 
@@ -382,6 +471,13 @@ You can change the log level from **Maintenance → Log Level** without editing 
 | **Clear Default** | Remove the default source setting (falls back to Manual Recording) |
 | **Open Sources Folder** | Open the sources directory in Finder |
 | **Refresh Sources** | Rescan the sources directory for new or updated sources |
+
+### Chat
+
+| Menu Item | Description |
+|-----------|-------------|
+| **Edit Chat Config...** | Opens a JSON editor for the `chat` section of `config.json` (CLI binary, model, system prompt, assistant name, prompts, export directory, auto-save, logging, history depth) |
+| **Save Chat** | Save the current chat conversation to a markdown file in the recording's `chats/` folder |
 
 ### Calendar
 

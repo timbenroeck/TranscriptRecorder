@@ -272,6 +272,39 @@ _SVG_SOURCES: dict[str, str] = {
         '<rect width="18" height="18" x="3" y="4" rx="2"/>'
         '<path d="M3 10h18"/></svg>'
     ),
+    "file_cog": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M15 8a1 1 0 0 1-1-1V2a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8z"/>'
+        '<path d="M20 8v12a2 2 0 0 1-2 2h-4.182"/>'
+        '<path d="m3.305 19.53.923-.382"/>'
+        '<path d="M4 10.592V4a2 2 0 0 1 2-2h8"/>'
+        '<path d="m4.228 16.852-.924-.383"/>'
+        '<path d="m5.852 15.228-.383-.923"/>'
+        '<path d="m5.852 20.772-.383.924"/>'
+        '<path d="m8.148 15.228.383-.923"/>'
+        '<path d="m8.53 21.696-.382-.924"/>'
+        '<path d="m9.773 16.852.922-.383"/>'
+        '<path d="m9.773 19.148.922.383"/>'
+        '<circle cx="7" cy="18" r="3"/></svg>'
+    ),
+    "eraser": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/>'
+        '<path d="M22 21H7"/><path d="m5 11 9 9"/></svg>'
+    ),
+    "trash": (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>'
+        '<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>'
+        '<line x1="10" x2="10" y1="11" y2="17"/>'
+        '<line x1="14" x2="14" y1="11" y2="17"/></svg>'
+    ),
     "calendar_sync": (
         '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
         'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
