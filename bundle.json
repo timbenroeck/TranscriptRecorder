@@ -1,6 +1,7 @@
 {
   "sources": [
     "zoom",
+    "zoom_cc",
     "msteams"
   ],
   "tools": [
