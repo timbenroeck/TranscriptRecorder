@@ -88,19 +88,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Build cortex command with optional connection flag
-# --bypass skips permission prompts for unattended execution
 if [ -n "$CORTEX_CONNECTION" ]; then
     echo ""
     echo "============================================"
-    echo "cortex --output-format stream-json -m $MODEL -c $CORTEX_CONNECTION  -p '$PROMPT'"
+    echo 'cortex --allowed-tools "Read" "Write" "Glob" "Bash" "Edit" "Memory" --output-format stream-json -m '"$MODEL"' -c '"$CORTEX_CONNECTION"'  -p '"'$PROMPT'"
     echo "============================================"
     echo ""
-    cortex --output-format stream-json -m "$MODEL" -c "$CORTEX_CONNECTION" -p "$PROMPT"
+    cortex --allowed-tools "Read" "Write" "Glob" "Bash" "Edit" "Memory" --output-format stream-json -m "$MODEL" -c "$CORTEX_CONNECTION" -p "$PROMPT"
 else
     echo ""
     echo "============================================"
-    echo "cortex --output-format stream-json -m $MODEL  -p '$PROMPT'"
+    echo 'cortex --allowed-tools "Read" "Write" "Glob" "Bash" "Edit" "Memory" --output-format stream-json -m '"$MODEL"'  -p '"'$PROMPT'"
     echo "============================================"
     echo ""
-    cortex --output-format stream-json -m "$MODEL" -p "$PROMPT"
+    cortex --allowed-tools "Read" "Write" "Glob" "Bash" "Edit" "Memory" --output-format stream-json -m "$MODEL" -p "$PROMPT"
 fi
