@@ -4464,12 +4464,37 @@ class TranscriptRecorderApp(QMainWindow):
         max_history = chat_cfg.get("max_history_messages", 5)
         prompts = chat_cfg.get("prompts", [])
 
+        # Build the effective extra-args list in order:
+        #   1. --output-format stream-json (if stream_json_output enabled)
+        #   2. --bypass (if bypass_enabled)
+        #   3. user-supplied cli_extra_args
+        #   4. --allowed-tools <tools...> (if allowed_tools_enabled)
+        effective_extra_args: list = []
+
+        stream_json_output = chat_cfg.get("stream_json_output", True)
+        if stream_json_output:
+            effective_extra_args.extend(["--output-format", "stream-json"])
+
+        bypass_enabled = chat_cfg.get("bypass_enabled", True)
+        if bypass_enabled:
+            effective_extra_args.append("--bypass")
+
+        effective_extra_args.extend(
+            cli_extra_args if isinstance(cli_extra_args, list) else [])
+
+        allowed_tools_enabled = chat_cfg.get("allowed_tools_enabled", True)
+        allowed_tools = chat_cfg.get(
+            "allowed_tools",
+            ["Read", "Write", "Glob", "Bash", "Edit", "Memory"])
+        if allowed_tools_enabled and isinstance(allowed_tools, list) and allowed_tools:
+            effective_extra_args.append("--allowed-tools")
+            effective_extra_args.extend(allowed_tools)
+
         self._chat_widget.set_system_prompt(system_prompt)
         self._chat_widget.set_connection(connection)
         self._chat_widget.set_model(model)
         self._chat_widget.set_cli_binary(cli_binary)
-        self._chat_widget.set_cli_extra_args(
-            cli_extra_args if isinstance(cli_extra_args, list) else [])
+        self._chat_widget.set_cli_extra_args(effective_extra_args)
         self._chat_widget.set_assistant_name(assistant_name)
         self._chat_widget.set_chat_export_directory(export_dir)
         self._chat_widget.set_auto_save(auto_save)
@@ -4483,7 +4508,10 @@ class TranscriptRecorderApp(QMainWindow):
                     f"assistant={assistant_name}, "
                     f"auto_save={auto_save}, logging={chat_logging}, "
                     f"max_history={max_history}, "
-                    f"prompts={len(prompts) if isinstance(prompts, list) else 0}")
+                    f"prompts={len(prompts) if isinstance(prompts, list) else 0}, "
+                    f"stream_json={stream_json_output}, bypass={bypass_enabled}, "
+                    f"allowed_tools_enabled={allowed_tools_enabled}, "
+                    f"allowed_tools={allowed_tools if allowed_tools_enabled else []}")
 
     def _on_chat_edit_config(self):
         """Open the chat config JSON editor dialog."""

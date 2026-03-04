@@ -535,7 +535,7 @@ class MeetingChatWidget(QWidget):
         self._model = ""
         self._connection = ""
         self._cli_binary = "cortex"
-        self._cli_extra_args: List[str] = ["--bypass"]
+        self._cli_extra_args: List[str] = []
         self._assistant_name = "Assistant"
         self._chat_export_directory = ""
         self._system_prompt = (
@@ -642,7 +642,15 @@ class MeetingChatWidget(QWidget):
         if self._chat_worker and self._chat_worker.isRunning():
             self._chat_worker.cancel()
             self._chat_worker.wait(5000)
+        # Use deleteLater() to defer C++ QThread destruction until the Qt
+        # event loop confirms the thread has fully unwound.
+        old_worker = self._chat_worker
         self._chat_worker = None
+        if old_worker is not None:
+            try:
+                old_worker.deleteLater()
+            except Exception:
+                pass
         self._current_bubble = None
         self._messages.clear()
         self._first_message_sent = False
@@ -661,11 +669,15 @@ class MeetingChatWidget(QWidget):
         self._input.clear()
 
     def _clear_bubbles(self):
-        while self._history_layout.count() > 0:
-            item = self._history_layout.takeAt(0)
-            w = item.widget()
-            if w:
+        # Remove all widget items but keep the trailing stretch spacer so that
+        # subsequent insertWidget(count-1, ...) continues to work correctly.
+        i = self._history_layout.count() - 1
+        while i >= 0:
+            item = self._history_layout.itemAt(i)
+            if item and item.widget():
+                w = self._history_layout.takeAt(i).widget()
                 w.deleteLater()
+            i -= 1
 
     def is_chat_running(self) -> bool:
         return self._chat_worker is not None and self._chat_worker.isRunning()
@@ -716,9 +728,6 @@ class MeetingChatWidget(QWidget):
             self._update_transcript_indicator()
 
         banner_prompt = session.system_prompt or self._system_prompt
-        if banner_prompt and self._messages:
-            self._ensure_system_prompt_banner(banner_prompt)
-
         is_dark = self._is_dark_fn()
         for msg in self._messages:
             bubble = _MessageBubble(
@@ -736,6 +745,11 @@ class MeetingChatWidget(QWidget):
                 bubble.set_transcript(tx_text, tx_label)
             idx = max(0, self._history_layout.count() - 1)
             self._history_layout.insertWidget(idx, bubble)
+
+        # Insert the system prompt banner at position 0 *after* all message
+        # bubbles have been added, so it always sits above them.
+        if banner_prompt and self._messages:
+            self._ensure_system_prompt_banner(banner_prompt)
 
         QTimer.singleShot(50, self._scroll_to_bottom)
 
@@ -1666,23 +1680,53 @@ class MeetingChatWidget(QWidget):
         return "\n".join(parts)
 
     def _on_thinking_update(self, chunk: str):
-        if self._current_bubble:
-            self._current_bubble.append_thinking(chunk)
-            QTimer.singleShot(10, self._scroll_to_bottom)
+        try:
+            if self._current_bubble:
+                self._current_bubble.append_thinking(chunk)
+                QTimer.singleShot(10, self._scroll_to_bottom)
+        except Exception as e:
+            logger.error(f"Chat: _on_thinking_update error: {e}", exc_info=True)
 
     def _on_text_update(self, chunk: str):
-        if self._current_bubble:
-            self._current_bubble.collapse_thinking()
-            self._current_bubble.append_text(chunk)
-            QTimer.singleShot(10, self._scroll_to_bottom)
+        try:
+            if self._current_bubble:
+                self._current_bubble.collapse_thinking()
+                self._current_bubble.append_text(chunk)
+                QTimer.singleShot(10, self._scroll_to_bottom)
+        except Exception as e:
+            logger.error(f"Chat: _on_text_update error: {e}", exc_info=True)
 
     def _on_tool_use_update(self, status: str):
-        if self._current_bubble:
-            self._current_bubble.set_tool_status(status)
-            QTimer.singleShot(10, self._scroll_to_bottom)
+        try:
+            if self._current_bubble:
+                self._current_bubble.set_tool_status(status)
+                QTimer.singleShot(10, self._scroll_to_bottom)
+        except Exception as e:
+            logger.error(f"Chat: _on_tool_use_update error: {e}", exc_info=True)
 
     def _on_finished(self, full_thinking: str, full_text: str,
                      stderr: str, exit_code: int):
+        try:
+            self._on_finished_impl(full_thinking, full_text, stderr, exit_code)
+        except Exception as e:
+            logger.error(f"Chat: _on_finished error: {e}", exc_info=True)
+            # Always restore the UI to a usable state even if something went wrong
+            self._current_bubble = None
+            old_worker = self._chat_worker
+            self._chat_worker = None
+            if old_worker is not None:
+                try:
+                    old_worker.deleteLater()
+                except Exception:
+                    pass
+            try:
+                self._send_btn.setEnabled(True)
+                self._input.setEnabled(True)
+            except Exception:
+                pass
+
+    def _on_finished_impl(self, full_thinking: str, full_text: str,
+                          stderr: str, exit_code: int):
         logger.debug(f"Chat finished: exit_code={exit_code}, "
                      f"text_len={len(full_text)}, stderr_len={len(stderr)}")
 
@@ -1718,7 +1762,17 @@ class MeetingChatWidget(QWidget):
                 + (f"\nStderr:\n{stderr}" if stderr.strip() else ""))
 
         self._current_bubble = None
+        # Defer worker destruction via deleteLater() so Qt can finish
+        # unwinding the thread before the C++ QThread object is freed.
+        # Directly assigning None here can trigger QThread::~QThread() while
+        # the thread is still running, causing a fatal Qt abort.
+        old_worker = self._chat_worker
         self._chat_worker = None
+        if old_worker is not None:
+            try:
+                old_worker.deleteLater()
+            except Exception:
+                pass
         self._send_btn.setEnabled(True)
         self._input.setEnabled(True)
         self._input.setFocus()

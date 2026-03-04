@@ -442,13 +442,14 @@ CortexChatWorker = None  # removed — use ChatCLIWorker
 class ChatCLIWorker(QThread):
     """Background worker that streams a single CLI chat turn.
 
-    Spawns ``<cli_binary> --output-format stream-json [-m <model>] -p "<prompt>"``
-    and emits fine-grained signals as JSON lines arrive so the UI can show
-    thinking blocks, streamed text, and tool-use status in real time.
+    Spawns ``<cli_binary> [cli_extra_args...] [-m <model>] [-c <connection>]
+    -p "<prompt>"`` and emits fine-grained signals as JSON lines arrive so
+    the UI can show thinking blocks, streamed text, and tool-use status in
+    real time.
 
-    The CLI binary and extra arguments are configurable so the same worker
-    can drive Cortex, Claude, or any CLI that speaks the Anthropic
-    stream-json protocol.
+    All CLI flags (including ``--output-format stream-json``, ``--bypass``,
+    and ``--allowed-tools``) are supplied via *cli_extra_args* so they can
+    be toggled from config without code changes.
 
     The subprocess is started in its own process group
     (``start_new_session=True``) so :meth:`cancel` can tear down the
@@ -480,10 +481,7 @@ class ChatCLIWorker(QThread):
         try:
             env = ToolRunnerWorker._get_user_env()
 
-            cmd: List[str] = [
-                self._cli_binary,
-                "--output-format", "stream-json",
-            ]
+            cmd: List[str] = [self._cli_binary]
             if self._model:
                 cmd.extend(["-m", self._model])
             cmd.extend(a for a in self._cli_extra_args if a)

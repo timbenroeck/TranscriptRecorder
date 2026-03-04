@@ -13,8 +13,10 @@ Meeting Chat runs a configurable CLI tool (Cortex, Claude, or any CLI that suppo
 Each time you send a message, the widget spawns a subprocess:
 
 ```
-<cli_binary> --output-format stream-json [-m <model>] [extra_args...] [-c <connection>] -p "<prompt>"
+<cli_binary> [--output-format stream-json] [-m <model>] [--bypass] [extra_args...] [--allowed-tools ...] [-c <connection>] -p "<prompt>"
 ```
+
+The flags in brackets are each individually configurable — see [Configuring the CLI](#configuring-the-cli) below.
 
 If `model` is blank (empty string), the `-m` flag is omitted entirely and the CLI uses its own default model.
 
@@ -29,16 +31,64 @@ All chat settings are edited via **Chat > Edit Chat Config...**, which opens a J
 | Config Key | Default | Description |
 |---|---|---|
 | `cli_binary` | `"cortex"` | Executable name on PATH |
-| `cli_extra_args` | `[]` | Additional flags passed before `-p` |
+| `stream_json_output` | `true` | Pass `--output-format stream-json` to the CLI |
+| `bypass_enabled` | `true` | Pass `--bypass` to the CLI |
+| `cli_extra_args` | `[]` | Additional flags inserted after `--bypass` |
+| `allowed_tools_enabled` | `true` | Enable/disable the `--allowed-tools` flag |
+| `allowed_tools` | `["Read","Write","Glob","Bash","Edit","Memory"]` | Tool permissions passed to the CLI |
+
+### Bypass Flag
+
+The `--bypass` flag is used by Snowflake Cortex to skip certain IT/policy enforcement controls. Some corporate environments have this capability disabled. You can turn it off without affecting anything else:
+
+```json
+"bypass_enabled": false
+```
+
+### Stream JSON Output
+
+The `--output-format stream-json` flag tells the CLI to emit responses as newline-delimited JSON, which enables streaming display of text, thinking blocks, and tool-use status in the UI. Disable this only if your CLI does not support the flag:
+
+```json
+"stream_json_output": false
+```
+
+> **Note:** Disabling `stream_json_output` means the CLI output will not be parsed as JSON. The raw output will still be displayed as text, but thinking blocks and tool-use status will not be shown.
+
+### Allowed Tools
+
+Cortex (and compatible CLIs) support an `--allowed-tools` flag that explicitly grants the CLI permission to use specific tools. By default the app passes:
+
+```
+--allowed-tools Read Write Glob Bash Edit Memory
+```
+
+This is controlled by two config keys:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `allowed_tools_enabled` | boolean | `true` | When `true`, the `--allowed-tools` flag is injected automatically |
+| `allowed_tools` | string[] | `["Read","Write","Glob","Bash","Edit","Memory"]` | The tools to allow |
+
+To disable all tool permissions (run Cortex without `--allowed-tools`), set `allowed_tools_enabled` to `false`.
+
+To restrict to a subset of tools, update the `allowed_tools` array:
+
+```json
+"allowed_tools_enabled": true,
+"allowed_tools": ["Read", "Glob"]
+```
+
+The `--allowed-tools` arguments are appended after any `cli_extra_args` you've provided.
 
 ### Supported CLIs
 
-| CLI | Binary | Typical Extra Args | Notes |
-|---|---|---|---|
-| **Snowflake Cortex** | `cortex` | `["--bypass"]` | Uses `-c` for Snowflake connection from `~/.snowflake/connections.toml` |
-| **Claude Code** | `claude` | `[]` | Uses the same stream-json output format |
+| CLI | Binary | Notes |
+|---|---|---|
+| **Snowflake Cortex** | `cortex` | Uses `-c` for Snowflake connection from `~/.snowflake/connections.toml`. `bypass_enabled` may need to be `false` on some corporate networks. |
+| **Claude Code** | `claude` | Uses the same stream-json output format. Set `bypass_enabled: false`. |
 
-Any CLI that accepts `-p PROMPT --output-format stream-json` (and optionally `-m MODEL`) and emits Anthropic-style JSON can be used.
+Any CLI that accepts `-p PROMPT` (and optionally `--output-format stream-json` and `-m MODEL`) and emits Anthropic-style JSON can be used.
 
 ## System Prompt
 
@@ -285,6 +335,10 @@ All settings live under the `chat` key in `config.json`. Edit them via **Chat > 
     "system_prompt": "You are a helpful assistant analyzing a meeting transcript. Respond in well-formatted markdown. Be concise and specific.",
     "cli_binary": "cortex",
     "cli_extra_args": [],
+    "bypass_enabled": true,
+    "stream_json_output": true,
+    "allowed_tools_enabled": true,
+    "allowed_tools": ["Read", "Write", "Glob", "Bash", "Edit", "Memory"],
     "cortex_connection": "",
     "model": "",
     "assistant_name": "Cortex",
@@ -306,7 +360,11 @@ All settings live under the `chat` key in `config.json`. Edit them via **Chat > 
 |---|---|---|---|
 | `system_prompt` | string | *(see above)* | System preamble prepended to every prompt |
 | `cli_binary` | string | `"cortex"` | CLI executable name |
-| `cli_extra_args` | string[] | `[]` | Additional CLI flags |
+| `cli_extra_args` | string[] | `[]` | Additional CLI flags passed after `--bypass` and before `--allowed-tools` |
+| `bypass_enabled` | boolean | `true` | Pass `--bypass` to the CLI |
+| `stream_json_output` | boolean | `true` | Pass `--output-format stream-json` to the CLI |
+| `allowed_tools_enabled` | boolean | `true` | Inject `--allowed-tools` into the CLI call |
+| `allowed_tools` | string[] | `["Read","Write","Glob","Bash","Edit","Memory"]` | Tools the CLI is permitted to use |
 | `cortex_connection` | string | `""` | Connection name passed via `-c` (blank = default) |
 | `model` | string | `""` | LLM model identifier (blank = CLI default, shown as "auto") |
 | `assistant_name` | string | `"Cortex"` | Display name in bubbles and exports |
