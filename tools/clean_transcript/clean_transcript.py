@@ -29,7 +29,14 @@ Examples:
   python3 clean_transcript.py -t /path/to/meeting_transcript.txt --no-backup
 
   # With custom corrections file
+  # With custom corrections file
   python3 clean_transcript.py -t /path/to/meeting_transcript.txt --corrections /path/to/corrections.json
+
+Per-meeting corrections:
+  If a meeting_details.txt file exists alongside the transcript, any lines
+  matching the pattern  <incorrect> -> <correct>  will be parsed and
+  merged into the corrections dictionary for that run. These per-meeting
+  corrections take precedence over corrections.json entries.
 """
 
 import argparse
@@ -118,6 +125,25 @@ def load_corrections(path: str) -> dict:
     """Load corrections JSON. Keys = correct form, values = list of incorrect variants."""
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+def parse_meeting_details_corrections(path: str) -> dict:
+    """Parse per-meeting corrections from meeting_details.txt.
+
+    Lines matching the format  <incorrect> -> <correct>  are extracted.
+    Returns a dict in the same shape as corrections.json:
+      { correct_form: [incorrect_variant, ...] }
+    All other lines are silently ignored.
+    """
+    corrections = {}
+    pattern = re.compile(r'^\s*(.+?)\s*->\s*(.+?)\s*$')
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            m = pattern.match(line)
+            if m:
+                incorrect, correct = m.group(1), m.group(2)
+                corrections.setdefault(correct, []).append(incorrect)
+    return corrections
 
 
 def build_corrections_regex(corrections: dict) -> list:
@@ -406,6 +432,18 @@ def main():
             if not args.quiet:
                 print(f"Loaded corrections from: {default_corrections_path}", file=sys.stderr)
 
+    meeting_details_path = os.path.join(
+        os.path.dirname(os.path.abspath(args.transcript)), 'meeting_details.txt'
+    )
+    meeting_details_count = 0
+    if os.path.isfile(meeting_details_path):
+        meeting_corrections = parse_meeting_details_corrections(meeting_details_path)
+        for correct, variants in meeting_corrections.items():
+            corrections.setdefault(correct, []).extend(variants)
+        meeting_details_count = sum(len(v) for v in meeting_corrections.values())
+        if not args.quiet and meeting_details_count:
+            print(f"Loaded {meeting_details_count} per-meeting correction(s) from: {meeting_details_path}", file=sys.stderr)
+
     corrections_regex = build_corrections_regex(corrections)
 
     # Read transcript
@@ -427,7 +465,9 @@ def main():
         print(f"  (Unverified) tags removed: {stats['unverified_removed']}", file=sys.stderr)
         print(f"  Filler words cleaned: {stats['fillers_found']}", file=sys.stderr)
         print(f"  Stutters cleaned: {stats['stutters_found']}", file=sys.stderr)
-        print(f"  Corrections applied: {len(corrections)} rules loaded", file=sys.stderr)
+        print(f"  Corrections applied: {len(corrections)} rules loaded"
+              f"{f' ({meeting_details_count} from meeting_details.txt)' if meeting_details_count else ''}",
+              file=sys.stderr)
         print(f"{'='*50}\n", file=sys.stderr)
 
     # Output
