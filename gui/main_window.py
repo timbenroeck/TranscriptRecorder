@@ -2604,7 +2604,9 @@ class TranscriptRecorderApp(QMainWindow):
         if new_name == old_name:
             return  # Already in sync
         
-        new_path = self.current_recording_path.parent / new_name
+        correct_parent = self.export_base_dir / "recordings" / dt.strftime('%Y') / dt.strftime('%m')
+        correct_parent.mkdir(parents=True, exist_ok=True)
+        new_path = correct_parent / new_name
         
         if new_path.exists():
             logger.warning(f"Cannot rename recording folder: target already exists: {new_path}")
