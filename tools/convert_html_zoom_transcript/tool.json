@@ -1,0 +1,15 @@
+{
+  "display_name": "Convert Zoom Transcript HTML",
+  "description": "Converts raw Zoom transcript HTML into a clean transcript. Paste the <ul class='transcript-list'> outerHTML from DevTools into the Transcript tab, click Save, then run this tool.",
+  "script": "convert_html_zoom_transcript.py",
+  "streaming": false,
+  "refresh_on_complete": ["meeting_transcript", "meeting_details"],
+  "parameters": [
+    {
+      "flag": "--transcript-file",
+      "label": "Transcript File",
+      "builtin": "meeting_transcript",
+      "required": true
+    }
+  ]
+}
